@@ -169,6 +169,18 @@ export function dispatchPageHide(options: { persisted: boolean }): void {
 	window.dispatchEvent(event);
 }
 
+export function dispatchPageShow(options: { persisted: boolean }): void {
+	const event = new Event("pageshow");
+	Object.defineProperty(event, "persisted", { value: options.persisted });
+	window.dispatchEvent(event);
+}
+
+export function dispatchBeforeUnload(): Event {
+	const event = new Event("beforeunload", { cancelable: true });
+	window.dispatchEvent(event);
+	return event;
+}
+
 export function dispatchVisibilityChange(
 	visibilityState: "hidden" | "visible",
 ): void {
