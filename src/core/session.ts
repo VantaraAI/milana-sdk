@@ -528,15 +528,11 @@ export class MilanaSession implements IMilanaSessionSingleton {
 	private async startOrRestartOrResumeSession(): Promise<{
 		success: boolean;
 	}> {
-		// Serialize session starts so only one POST /session is ever in flight.
-		// A restart is fire-and-forget (void), and both /update and /batch can
-		// trigger one, so two restart responses arriving close together would
-		// otherwise each run a full start and mint two server-side sessions —
-		// one immediately orphaned, plus a double replay and sampling decision.
-		// The `state === Initializing` check below does NOT prevent this: state
-		// only flips to Recording after /session resolves, so both racing starts
-		// see Initializing during that window and pass. The in-flight start
-		// already does what every queued trigger wants, so coalesce onto it.
+		// Serialize session starts so only one POST /session is in flight: a
+		// restart is fire-and-forget and both /update and /batch can trigger
+		// one, so two arriving together would otherwise mint two sessions. The
+		// Initializing check below can't prevent this — state only flips to
+		// Recording after /session resolves, so both racing starts pass it.
 		if (this.isStartingSession) {
 			console.debug(
 				"Milana: Session start already in flight, ignoring concurrent restart",
@@ -637,8 +633,6 @@ export class MilanaSession implements IMilanaSessionSingleton {
 				type: StateType.SessionNotSampled,
 				sessionId,
 			};
-			// Replay cached identity onto the new session row before draining
-			// the queue, so even an unsampled session is attributed.
 			if (shouldResendSavedIdentity) await this.resendSavedIdentity();
 			MilanaSession.processPendingQueue();
 			this.startIntegrationAutoDetection();
@@ -659,8 +653,9 @@ export class MilanaSession implements IMilanaSessionSingleton {
 		this.events = [];
 		this.bufferedCharacters = 0;
 
-		// Replay cached identity before recording starts and before the queue
-		// drains, so the first events on the new session id carry the user.
+		// Replay before recording starts and before the queue drains, so the
+		// first events on the new session carry the restored user and session
+		// context.
 		if (shouldResendSavedIdentity) await this.resendSavedIdentity();
 
 		// The replay's /update response can carry a fresh sampling decision that
@@ -749,10 +744,9 @@ export class MilanaSession implements IMilanaSessionSingleton {
 
 		if (!data.success) {
 			if (data.shouldRestartSession) {
-				// TODO: Stop this 'update' call from being silently dropped by
-				// queuing retries when the session restarts instead of failing
-				// immediately. (The restart replays the confirmed identity, but
-				// the payload that triggered the restart is not itself retried.)
+				// The restart replays the saved user and session context, but the
+				// payload that triggered the restart is not itself retried — it's
+				// reported as a failure to the caller and dropped.
 				if (allowRestart) {
 					void this.restartSession("update");
 				}
@@ -779,11 +773,11 @@ export class MilanaSession implements IMilanaSessionSingleton {
 		return { success: true };
 	}
 
-	// Sends an identity update, then — only on success — saves the merged result
-	// as the confirmed identity. A concern is skipped when merging the payload
-	// in wouldn't change what the server already has (so an identical call isn't
-	// re-sent); any change goes through. The verbatim payload is sent; the
-	// merged value is what we save and later replay.
+	// Sends a user / session-context update, then — only on success — saves the
+	// merged result as what the server has confirmed. Skips the request entirely
+	// when merging the payload in wouldn't change the saved state (an identical
+	// call isn't re-sent); any real change is sent. The verbatim payload goes on
+	// the wire; the merged value is what we save and later replay.
 	private async sendUpdate(
 		payload: UpdatePayloadInternal,
 		{ allowRestart }: { allowRestart: boolean },
@@ -798,13 +792,10 @@ export class MilanaSession implements IMilanaSessionSingleton {
 		const sessionIdAtSend = confirmed?.sessionId ?? null;
 		const prevUser = confirmed?.user ?? null;
 		const prevSessionContext = confirmed?.sessionContext ?? null;
-		// TODO: Replace with a proper deduplicating query system for all ingest
-		// HTTP reqs. This dedups only identity /update; events and batches still
-		// send unconditionally.
-		//
-		// The merge here only decides whether anything changed — the value we
+		// The merge here only decides whether anything changed; the value we
 		// actually persist is re-merged against the latest saved state on success
-		// below, so a concurrent write can't be clobbered.
+		// below, so a concurrent write can't be clobbered. (Only identity /update
+		// is deduped this way — events and batches always send.)
 		const didUserChange =
 			payload.user !== undefined &&
 			!deepEqual(mergeUser(prevUser, payload.user), prevUser);
@@ -831,9 +822,10 @@ export class MilanaSession implements IMilanaSessionSingleton {
 			if ((latest?.sessionId ?? null) !== sessionIdAtSend) {
 				return result;
 			}
-			// Re-merge onto the latest saved state and leave the untouched concern
-			// alone, so a user-only update can't clobber a sessionContext a
-			// concurrent same-session call just saved (or vice versa).
+			// Re-merge onto the latest saved state, leaving whichever of user /
+			// session context this call didn't touch alone, so a user-only update
+			// can't clobber a session context a concurrent same-session call just
+			// saved (or vice versa).
 			saveSessionState({
 				sessionId: latest?.sessionId ?? null,
 				user:
@@ -941,10 +933,6 @@ export class MilanaSession implements IMilanaSessionSingleton {
 			}
 			const integrations = detectIntegrations(this.enabledIntegrations);
 			if (Object.keys(integrations).length === 0) return;
-			// Route through the normal identity path: sendUpdate dedups the
-			// detected integrations against the cached sessionContext and replays
-			// them onto a new session after a restart, so the loop needs no
-			// separate fingerprint or re-attach bookkeeping.
 			await this.sendUpdate(
 				{ session: { integrations } },
 				{ allowRestart: true },

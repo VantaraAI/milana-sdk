@@ -353,8 +353,8 @@ describe("Core Library - Identify and Update", () => {
 					},
 				});
 
-				// The SDK now sends the merged identity it has cached, per
-				// concern, so assert the content rather than a byte-exact body.
+				// The SDK sends the merged user and session context it has cached,
+				// so assert the content rather than a byte-exact body.
 				const updateCall = getCallsToEndpoint("/update")[0];
 				const body = JSON.parse((updateCall[1] as RequestInit).body as string);
 				expect(body).toEqual({
