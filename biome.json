@@ -1,0 +1,92 @@
+{
+	"$schema": "https://biomejs.dev/schemas/2.4.15/schema.json",
+	"vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
+	"files": {
+		"ignoreUnknown": true,
+		"includes": [
+			"**/*.{ts,tsx,js,mjs,cjs,json,jsonc}",
+			"!**/dist",
+			"!**/node_modules"
+		]
+	},
+	"formatter": {
+		"enabled": true,
+		"indentStyle": "tab",
+		"indentWidth": 2,
+		"lineWidth": 80,
+		"lineEnding": "lf",
+		"bracketSameLine": true,
+		"useEditorconfig": true
+	},
+	"javascript": {
+		"formatter": {
+			"quoteStyle": "double",
+			"trailingCommas": "all",
+			"semicolons": "always",
+			"arrowParentheses": "always",
+			"bracketSameLine": true,
+			"bracketSpacing": true,
+			"quoteProperties": "asNeeded"
+		}
+	},
+	"linter": {
+		"enabled": true,
+		"rules": {
+			"recommended": true,
+			"a11y": { "recommended": false },
+			"complexity": {
+				"noArguments": "error",
+				"useArrowFunction": "off"
+			},
+			"correctness": {
+				"noUnusedVariables": {
+					"level": "error",
+					"options": { "ignoreRestSiblings": true }
+				},
+				"noUnusedFunctionParameters": {
+					"level": "error",
+					"options": { "ignoreRestSiblings": true }
+				},
+				"noUnusedImports": "error",
+				"useExhaustiveDependencies": "warn",
+				"useHookAtTopLevel": "error"
+			},
+			"style": {
+				"useConst": "error",
+				"useConsistentObjectDefinitions": {
+					"level": "error",
+					"options": { "syntax": "shorthand" }
+				},
+				"noRestrictedImports": {
+					"level": "error",
+					"options": {
+						"paths": {
+							"assert": {
+								"message": "Use { assert } from 'es-toolkit' instead"
+							},
+							"node:assert": {
+								"message": "Use { assert } from 'es-toolkit' instead"
+							}
+						}
+					}
+				},
+				"noCommonJs": "error",
+				"noNonNullAssertion": "off",
+				"useImportType": "error"
+			},
+			"suspicious": {
+				"noExplicitAny": "error"
+			},
+			"nursery": {
+				"noFloatingPromises": "error",
+				"noMisusedPromises": "error",
+				"noUnnecessaryConditions": "warn"
+			}
+		},
+		"includes": ["**/*.{ts,tsx,js,mjs,cjs}", "!**/*.d.ts"]
+	},
+	"assist": {
+		"enabled": true,
+		"actions": { "source": { "organizeImports": "on" } }
+	}
+}

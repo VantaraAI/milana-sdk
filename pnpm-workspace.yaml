@@ -1,0 +1,4 @@
+# Require packages to be published for at least 7 days before installation.
+# Mitigates supply chain attacks — malicious releases are typically discovered
+# and removed within hours/days of publication.
+minimumReleaseAge: 10080
