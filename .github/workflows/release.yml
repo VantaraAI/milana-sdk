@@ -62,8 +62,7 @@ jobs:
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
       - name: Publish to npm
-        # TODO: Remove --provenance=false when the repo is made public
-        run: npm publish --access public --provenance=false
+        run: npm publish --access public --provenance
 
       - name: Build CDN bundle
         run: pnpm build:cdn
