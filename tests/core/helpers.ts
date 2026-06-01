@@ -179,13 +179,32 @@ export function dispatchVisibilityChange(
 	document.dispatchEvent(new Event("visibilitychange"));
 }
 
+/**
+ * Reads the persisted session-state blob the SDK now writes to
+ * sessionStorage (replacing the bare "sessionId" string). Returns null when
+ * no blob is present.
+ */
+export function readStoredSessionState(): {
+	sessionId: string | null;
+	user: Record<string, unknown> | null;
+	sessionContext: Record<string, unknown> | null;
+} | null {
+	const raw = window.sessionStorage.getItem("milana_session_state");
+	return raw ? JSON.parse(raw) : null;
+}
+
+export function readStoredSessionId(): string | null {
+	return readStoredSessionState()?.sessionId ?? null;
+}
+
+export function getCallsToEndpoint(endpoint: string) {
+	return vi
+		.mocked(fetch)
+		.mock.calls.filter((call) => getUrlString(call[0]).endsWith(endpoint));
+}
+
 export function getBatchCalls() {
-	return vi.mocked(fetch).mock.calls.filter((call) => {
-		const url = call[0];
-		const urlString =
-			typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
-		return urlString.endsWith("/batch");
-	});
+	return getCallsToEndpoint("/batch");
 }
 
 export function getPageCloseCalls() {

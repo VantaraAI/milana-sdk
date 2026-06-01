@@ -1,12 +1,14 @@
 import { describe, expect, test, vi } from "vitest";
-import { removeItemMock, setItemMock } from "../setup";
 import {
 	clientKey,
+	getCallsToEndpoint,
 	importMilana,
 	importSession,
 	makeUpdateFailureResponse,
 	makeUpdateSuccessResponse,
 	productId,
+	readStoredSessionId,
+	readStoredSessionState,
 	setupCoreTestHarness,
 } from "./helpers";
 
@@ -351,22 +353,20 @@ describe("Core Library - Identify and Update", () => {
 					},
 				});
 
-				expect(fetch).toHaveBeenCalledWith(
-					"https://in.getmilana.ai/update",
-					expect.objectContaining({
-						method: "POST",
-						body: JSON.stringify({
-							session: {
-								metadata: { theme: "dark" },
-							},
-							user: {
-								userId: "user-456",
-								email: "enterprise@example.com",
-								metadata: { plan: "enterprise" },
-							},
-						}),
-					}),
-				);
+				// The SDK now sends the merged identity it has cached, per
+				// concern, so assert the content rather than a byte-exact body.
+				const updateCall = getCallsToEndpoint("/update")[0];
+				const body = JSON.parse((updateCall[1] as RequestInit).body as string);
+				expect(body).toEqual({
+					user: {
+						userId: "user-456",
+						email: "enterprise@example.com",
+						metadata: { plan: "enterprise" },
+					},
+					session: {
+						metadata: { theme: "dark" },
+					},
+				});
 			});
 
 			test("should handle minimal update gracefully", async () => {
@@ -542,24 +542,23 @@ describe("Core Library - Identify and Update", () => {
 				expect(result).toEqual({ success: false });
 			});
 
-			test("should restart session when update response requests it", async () => {
+			test("restarts the session when an update is rejected; the rejected update is not replayed", async () => {
 				const { update } = await importMilana();
 
 				const newSessionId = "test-session-restarted";
 				vi.mocked(fetch)
+					// The triggering /update is rejected with shouldRestartSession.
 					.mockResolvedValueOnce(
 						makeUpdateFailureResponse({
 							statusCode: 400,
 							errorCode: "SESSION_CLOSED",
 						}),
 					)
+					// Restart mints a fresh session.
 					.mockResolvedValueOnce({
 						ok: true,
 						json: () =>
-							Promise.resolve({
-								sampled: true,
-								sessionId: newSessionId,
-							}),
+							Promise.resolve({ sampled: true, sessionId: newSessionId }),
 					} as Response);
 
 				const result = await update({
@@ -568,25 +567,24 @@ describe("Core Library - Identify and Update", () => {
 				});
 				expect(result).toEqual({ success: false });
 
+				// Only /update (rejected) → /session (restart). Nothing replays:
+				// the rejected update never succeeded, so it was never saved — an
+				// accepted loss (write-on-success). The new session starts clean.
 				await vi.waitFor(() => {
 					expect(fetch).toHaveBeenCalledTimes(2);
 				});
-
 				expect(fetch).toHaveBeenNthCalledWith(
 					2,
 					"https://in.getmilana.ai/session",
-					expect.objectContaining({
-						method: "POST",
-					}),
+					expect.objectContaining({ method: "POST" }),
 				);
+				expect(getCallsToEndpoint("/update")).toHaveLength(1);
 
-				expect(removeItemMock).toHaveBeenCalledWith("milana_session_id");
+				// The blob points at the new session with no carried-over identity.
 				await vi.waitFor(() => {
-					expect(setItemMock).toHaveBeenCalledWith(
-						"milana_session_id",
-						newSessionId,
-					);
+					expect(readStoredSessionId()).toBe(newSessionId);
 				});
+				expect(readStoredSessionState()?.user).toBeNull();
 
 				const { MilanaSession, StateType } = await importSession();
 				await vi.waitFor(() => {
@@ -594,12 +592,6 @@ describe("Core Library - Identify and Update", () => {
 						StateType.Recording,
 					);
 				});
-
-				if (MilanaSession.currentSession?.state.type === StateType.Recording) {
-					expect(MilanaSession.currentSession.state.sessionId).toBe(
-						newSessionId,
-					);
-				}
 			});
 		});
 

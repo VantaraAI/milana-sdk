@@ -36,7 +36,6 @@ export interface IMilanaSessionSingleton {
 		type: string;
 		sessionId?: string; // Because state is a discriminated union
 	};
-	update(payload: UpdatePayloadInternal): Promise<{ success: boolean }>;
 }
 
 /**
@@ -178,9 +177,9 @@ export type UpdatePayload = {
 	session?: SessionUpdate;
 };
 
-// Internal shape accepted by MilanaSession.update — `user` is optional
-// here so updateSession() can send a session-only payload. The public
-// UpdatePayload keeps `user` required to preserve the legacy shape.
+// Internal shape sent to /update — `user` is optional here so a
+// session-only payload can be sent. The public UpdatePayload keeps `user`
+// required to preserve the legacy shape.
 export type UpdatePayloadInternal = {
 	user?: UserUpdate;
 	session?: SessionUpdate;

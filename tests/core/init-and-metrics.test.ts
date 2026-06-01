@@ -10,6 +10,7 @@ import {
 	logMetricsIntervalDuration,
 	mockFetch,
 	productId,
+	readStoredSessionId,
 	setupCoreTestHarness,
 	type TestSessionInternals,
 } from "./helpers";
@@ -71,10 +72,7 @@ describe("Core Library - Init and Metrics", () => {
 					metadata: {},
 				});
 
-				expect(setItemMock).toHaveBeenCalledWith(
-					"milana_session_id",
-					"test-session-123",
-				);
+				expect(readStoredSessionId()).toBe("test-session-123");
 			});
 
 			test("should use custom endpoint when provided", async () => {
@@ -217,7 +215,11 @@ describe("Core Library - Init and Metrics", () => {
 
 				const sessionId = "consistent-session-id";
 
-				window.sessionStorage.setItem("milana_session_id", sessionId);
+				// Seed an existing session in the blob so both inits resume it.
+				window.sessionStorage.setItem(
+					"milana_session_state",
+					JSON.stringify({ sessionId, user: null, sessionContext: null }),
+				);
 
 				vi.mocked(fetch).mockResolvedValueOnce({
 					ok: false,

@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import { removeItemMock, setItemMock } from "../setup";
 import {
 	clientKey,
 	getUrlString,
@@ -7,6 +6,7 @@ import {
 	importSession,
 	mockFetch,
 	productId,
+	readStoredSessionId,
 	seedEvents,
 	setupCoreTestHarness,
 	type TestSessionInternals,
@@ -299,11 +299,7 @@ describe("Batch send: exponential backoff and session restart", () => {
 			).tryToSendEvents();
 
 			expect(fetch).toHaveBeenCalledTimes(3);
-			expect(removeItemMock).toHaveBeenCalledWith("milana_session_id");
-			expect(setItemMock).toHaveBeenCalledWith(
-				"milana_session_id",
-				"session-2",
-			);
+			expect(readStoredSessionId()).toBe("session-2");
 			expect(MilanaSession.currentSession!.state.type).toBe(
 				StateType.Recording,
 			);
