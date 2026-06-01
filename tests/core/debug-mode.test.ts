@@ -42,10 +42,6 @@ describe("Debug Mode", () => {
 			"Milana [debug]: update invoked",
 			{ user: { userId: "u1" } },
 		);
-		expect(console.debug).toHaveBeenCalledWith(
-			"Milana [debug]: update executing",
-			{ user: { userId: "u1" } },
-		);
 
 		await identify({ userId: "u2", email: "a@b.com" });
 		expect(console.debug).toHaveBeenCalledWith("Milana [debug]: identify", {

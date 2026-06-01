@@ -1,11 +1,11 @@
 import { describe, expect, test, vi } from "vitest";
-import { setItemMock } from "../setup";
 import {
 	callMilana,
 	clientKey,
 	importSession,
 	makeUpdateSuccessResponse,
 	productId,
+	readStoredSessionId,
 	setupCoreTestHarness,
 	setupDocumentedStub,
 } from "./helpers";
@@ -53,10 +53,7 @@ describe("CDN script-tag loading", () => {
 					}),
 				}),
 			);
-			expect(setItemMock).toHaveBeenCalledWith(
-				"milana_session_id",
-				"test-session-123",
-			);
+			expect(readStoredSessionId()).toBe("test-session-123");
 		});
 
 		test("identify queued before init is dispatched after init resolves", async () => {

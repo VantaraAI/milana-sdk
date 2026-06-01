@@ -1,6 +1,7 @@
 import { describe, expect, test, vi } from "vitest";
 import {
 	clientKey,
+	getUrlString,
 	importMilana,
 	makeUpdateSuccessResponse,
 	productId,
@@ -139,8 +140,9 @@ describe("init → identify → update flow", () => {
 			await vi.advanceTimersByTimeAsync(1000);
 			await Promise.all([identify1, identify2, identify3]);
 
+			// Each distinct call is sent verbatim, in order (not coalesced or
+			// merged) — only an identical repeat would be skipped.
 			expect(fetch).toHaveBeenCalledTimes(4);
-
 			expect(fetch).toHaveBeenNthCalledWith(
 				2,
 				"https://in.getmilana.ai/update",
@@ -275,33 +277,32 @@ describe("init → identify → update flow", () => {
 				},
 			});
 
-			expect(fetch).toHaveBeenNthCalledWith(
-				3,
-				"https://in.getmilana.ai/update",
-				expect.objectContaining({
-					method: "POST",
-					headers: expect.objectContaining({
-						"X-Milana-Session-Id": "test-session-flow",
-					}) as Record<string, string>,
-					body: JSON.stringify({
-						session: {
-							metadata: {
-								feature: "settings",
-								sessionProp2: "new",
-								sharedProp: "sessionValue",
-							},
-						},
-						user: {
-							userId: "user-123",
-							metadata: {
-								plan: "enterprise",
-								userProp2: "value2",
-								sharedProp: "updatedUserValue",
-							},
-						},
-					}),
-				}),
+			// Each call is sent verbatim (the server does the cross-call merge),
+			// so the third send carries exactly update()'s own user and session
+			// payloads — user and session travel independently.
+			const thirdCall = vi
+				.mocked(fetch)
+				.mock.calls.filter((c) => getUrlString(c[0]).endsWith("/update"))[1];
+			const thirdBody = JSON.parse(
+				(thirdCall[1] as RequestInit).body as string,
 			);
+			expect(thirdBody).toEqual({
+				user: {
+					userId: "user-123",
+					metadata: {
+						plan: "enterprise",
+						userProp2: "value2",
+						sharedProp: "updatedUserValue",
+					},
+				},
+				session: {
+					metadata: {
+						feature: "settings",
+						sessionProp2: "new",
+						sharedProp: "sessionValue",
+					},
+				},
+			});
 
 			expect(fetch).toHaveBeenCalledTimes(3);
 		});

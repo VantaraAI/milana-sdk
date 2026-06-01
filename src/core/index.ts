@@ -109,18 +109,16 @@ export const _initWithCallerType = async (
 export const identify = async (
 	input: IdentifyInput,
 ): Promise<{ success: boolean }> => {
-	const result = await update({
-		user: {
-			userId: input.userId,
-			email: input.email,
-			name: input.name,
-			metadata: input.metadata,
-		},
-	});
+	const user = {
+		userId: input.userId,
+		email: input.email,
+		name: input.name,
+		metadata: input.metadata,
+	};
 	if (MilanaSession.debugMode) {
 		console.debug("Milana [debug]: identify", input);
 	}
-	return result;
+	return MilanaSession.sendUpdateWhenReady(Commands.Identify, { user });
 };
 
 /**
@@ -135,19 +133,7 @@ export const update = async (
 	if (MilanaSession.debugMode) {
 		console.debug("Milana [debug]: update invoked", input);
 	}
-	return new Promise<{ success: boolean }>((resolve) => {
-		MilanaSession.executeWhenReady(Commands.Update, async () => {
-			if (MilanaSession.debugMode) {
-				console.debug("Milana [debug]: update executing", input);
-			}
-			try {
-				const result = await MilanaSession.currentSession?.update(input);
-				resolve(result ?? { success: false });
-			} catch (_error) {
-				resolve({ success: false });
-			}
-		});
-	});
+	return MilanaSession.sendUpdateWhenReady(Commands.Update, input);
 };
 
 /**
@@ -169,8 +155,7 @@ export const updateUser = async (
 	if (MilanaSession.debugMode) {
 		console.debug("Milana [debug]: updateUser invoked", user);
 	}
-	const result = await update({ user });
-	return result;
+	return MilanaSession.sendUpdateWhenReady(Commands.UpdateUser, { user });
 };
 
 /**
@@ -185,8 +170,7 @@ export const updateSession = async (
 	if (MilanaSession.debugMode) {
 		console.debug("Milana [debug]: updateSession invoked", session);
 	}
-	const result = await update({ session });
-	return result;
+	return MilanaSession.sendUpdateWhenReady(Commands.UpdateSession, { session });
 };
 
 /**
