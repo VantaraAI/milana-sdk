@@ -9,14 +9,14 @@ importers:
   .:
     dependencies:
       '@rrweb/record':
-        specifier: ^2.0.0-alpha.18
+        specifier: 2.0.0-alpha.20
         version: 2.0.0-alpha.20
     devDependencies:
       '@biomejs/biome':
         specifier: ^2.4.15
         version: 2.4.15
       '@rrweb/types':
-        specifier: ^2.0.0-alpha.18
+        specifier: 2.0.0-alpha.20
         version: 2.0.0-alpha.20
       '@testing-library/react':
         specifier: ^16.0.0

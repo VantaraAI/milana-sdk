@@ -153,7 +153,9 @@ console.log("ok");
 
 	test("published runtime dependency surface stays narrow", () => {
 		expect(packageJson.dependencies).toEqual({
-			"@rrweb/record": "^2.0.0-alpha.18",
+			// Pinned exactly: alpha.20 carries rrweb's splitCssText/CSS fix that
+			// alpha.18 lacks, and we ship no patch, so we must not float.
+			"@rrweb/record": "2.0.0-alpha.20",
 		});
 		expect(packageJson.devDependencies).toHaveProperty("@rrweb/types");
 	});

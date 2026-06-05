@@ -63,11 +63,11 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"@rrweb/record": "^2.0.0-alpha.18"
+		"@rrweb/record": "2.0.0-alpha.20"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.4.15",
-		"@rrweb/types": "^2.0.0-alpha.18",
+		"@rrweb/types": "2.0.0-alpha.20",
 		"@testing-library/react": "^16.0.0",
 		"@types/node": "^25.9.1",
 		"@types/react": "^18.3.0",
