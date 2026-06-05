@@ -321,8 +321,22 @@ export class MilanaSession implements IMilanaSessionSingleton {
 		this.sessionInfo = sessionInfo;
 		this.state = state;
 
+		const maskingLevel = options.privacy?.maskingLevel ?? "normal";
+		const unmaskSelector = normalizeSelector(
+			options.privacy?.unmaskSelector,
+			"unmaskSelector",
+		);
+		// unmaskSelector only reveals values that maskingLevel masked, so it does
+		// nothing at "normal" (nothing is broadly masked there). Warn rather than
+		// silently ignore a misconfiguration.
+		if (maskingLevel === "normal" && unmaskSelector) {
+			console.warn(
+				'Milana: privacy.unmaskSelector is ignored at maskingLevel "normal"; it only reveals values masked by "high" or "xhigh".',
+			);
+		}
+
 		const privacyOptions: InitPrivacyOptions = {
-			maskingLevel: options.privacy?.maskingLevel ?? "normal",
+			maskingLevel,
 			blockClass: options.privacy?.blockClass ?? "milana-block",
 			blockSelector: normalizeSelector(
 				options.privacy?.blockSelector,
@@ -339,10 +353,7 @@ export class MilanaSession implements IMilanaSessionSingleton {
 				options.privacy?.maskSelector,
 				"maskSelector",
 			),
-			unmaskSelector: normalizeSelector(
-				options.privacy?.unmaskSelector,
-				"unmaskSelector",
-			),
+			unmaskSelector,
 			// Additional always-masked input types, layered on the built-in
 			// ALWAYS_MASKED_INPUT_TYPES. The built-ins are handled separately and
 			// cannot be disabled, so this defaults to empty.

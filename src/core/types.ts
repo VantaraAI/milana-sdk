@@ -69,9 +69,11 @@ export type InitPrivacyOptions = {
 	// Masks text and input values in matching subtrees. Explicit masks win over
 	// unmaskSelector.
 	maskSelector: string | null;
-	// Reveals masking-level–masked text/input values only. Does not override
-	// explicit masks, blocked elements, or always-masked input types (the
-	// built-in password/tel/email plus anything listed in maskInputTypes).
+	// Reveals values masked by maskingLevel — input values under "high"/"xhigh"
+	// and DOM text under "xhigh". Has no effect at "normal" (nothing is broadly
+	// masked there to reveal) and a warning is logged if set. Does not override
+	// explicit masks (maskSelector / maskTextClass), blocked elements, or the
+	// always-masked input types (password/tel/email plus maskInputTypes).
 	unmaskSelector: string | null;
 
 	// Additional input types to always mask, on top of the built-in

@@ -274,6 +274,48 @@ describe("Core Library - Init and Metrics", () => {
 					);
 				});
 
+				test("unmaskSelector at maskingLevel normal logs a warning", async () => {
+					const { init } = await importMilana();
+					mockSampledSession("unmask-normal-warning-session");
+
+					await init(
+						productId,
+						clientKey,
+						{
+							environment: "test",
+							version: "1.0",
+							metadata: {},
+						},
+						// No maskingLevel -> defaults to "normal", where unmaskSelector
+						// has nothing to reveal.
+						{ privacy: { unmaskSelector: ".public" } },
+					);
+
+					expect(console.warn).toHaveBeenCalledWith(
+						expect.stringContaining("privacy.unmaskSelector is ignored"),
+					);
+				});
+
+				test("unmaskSelector at maskingLevel high does not warn", async () => {
+					const { init } = await importMilana();
+					mockSampledSession("unmask-high-no-warning-session");
+
+					await init(
+						productId,
+						clientKey,
+						{
+							environment: "test",
+							version: "1.0",
+							metadata: {},
+						},
+						{ privacy: { maskingLevel: "high", unmaskSelector: ".public" } },
+					);
+
+					expect(console.warn).not.toHaveBeenCalledWith(
+						expect.stringContaining("privacy.unmaskSelector is ignored"),
+					);
+				});
+
 				test("explicit mask wins over unmaskSelector", async () => {
 					const { init } = await importMilana();
 					const { record } = await import("@rrweb/record");
