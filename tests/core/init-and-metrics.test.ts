@@ -530,11 +530,12 @@ describe("Core Library - Init and Metrics", () => {
 					expect(rrwebOptions.maskTextSelector).toBe("*");
 				});
 
-				test("strips stateful flags from a RegExp blockClass before recording", async () => {
+				test("a global RegExp blockClass blocks consistently instead of skipping every other element", async () => {
 					const { init } = await importMilana();
 					const { record } = await import("@rrweb/record");
 					mockSampledSession("regex-blockclass-session");
 
+					// Passing a global regex is an easy, natural mistake.
 					await init(
 						productId,
 						clientKey,
@@ -546,10 +547,58 @@ describe("Core Library - Init and Metrics", () => {
 						{ privacy: { blockClass: /secret/g } },
 					);
 
+					// rrweb (and this SDK) call .test() on the SAME blockClass object
+					// once per class token of every element, never resetting lastIndex.
+					// A raw /secret/g is stateful: it matches, advances lastIndex past
+					// the match, then fails on the next identical token — so every other
+					// element with class "secret" would silently escape blocking.
+					const raw = /secret/g;
+					expect([
+						raw.test("secret"),
+						raw.test("secret"),
+						raw.test("secret"),
+					]).toEqual([true, false, true]);
+
+					// The matcher we hand to rrweb must instead match the same token
+					// every time, regardless of how many elements precede it.
 					const { blockClass } = getRrwebOptions(record);
-					expect(blockClass).toBeInstanceOf(RegExp);
-					expect((blockClass as RegExp).global).toBe(false);
-					expect((blockClass as RegExp).source).toBe("secret");
+					const blocked = blockClass as RegExp;
+					expect([0, 1, 2, 3, 4].map(() => blocked.test("secret"))).toEqual([
+						true,
+						true,
+						true,
+						true,
+						true,
+					]);
+				});
+
+				test("a sticky RegExp blockClass keeps its start-anchored match semantics", async () => {
+					const { init } = await importMilana();
+					const { record } = await import("@rrweb/record");
+					mockSampledSession("sticky-blockclass-session");
+
+					// /secret/y anchors at the start of the class token.
+					await init(
+						productId,
+						clientKey,
+						{
+							environment: "test",
+							version: "1.0",
+							metadata: {},
+						},
+						{ privacy: { blockClass: /secret/y } },
+					);
+
+					const { blockClass } = getRrwebOptions(record);
+					const blocked = blockClass as RegExp;
+
+					// Anchoring is preserved: "secret" matches, "not-secret" does not.
+					// Naively dropping /y would start matching "not-secret" mid-token.
+					expect(blocked.test("secret")).toBe(true);
+					expect(blocked.test("not-secret")).toBe(false);
+					// ...and it is no longer stateful, so the result is stable.
+					expect(blocked.test("secret")).toBe(true);
+					expect(blocked.test("not-secret")).toBe(false);
 				});
 			});
 		});
