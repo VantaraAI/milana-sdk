@@ -33,6 +33,23 @@ function getRrwebOptions(recordFn: typeof rrwebRecord): RrwebRecordOptions {
 	return vi.mocked(recordFn).mock.calls[0]?.[0] as RrwebRecordOptions;
 }
 
+// Nests `el` several levels below an ancestor carrying `className`, with plain
+// intermediate wrappers in between. Masking must then resolve through the
+// ancestor walk (element.closest / parentElement) rather than matching the
+// element itself. Returns the outermost ancestor so callers can nest further.
+function nestUnder(className: string, el: HTMLElement, depth = 2): HTMLElement {
+	const root = document.createElement("div");
+	root.className = className;
+	let parent: HTMLElement = root;
+	for (let i = 0; i < depth; i++) {
+		const mid = document.createElement("div");
+		parent.appendChild(mid);
+		parent = mid;
+	}
+	parent.appendChild(el);
+	return root;
+}
+
 describe("Core Library - Init and Metrics", () => {
 	setupCoreTestHarness();
 
@@ -146,6 +163,22 @@ describe("Core Library - Init and Metrics", () => {
 					expect(rrwebOptions.maskInputFn?.(email, emailInput)).toBe(
 						"*".repeat(email.length),
 					);
+
+					// Text and inputs nested below a maskTextClass/maskInputClass
+					// (.milana-mask) ancestor are masked via the class ancestor walk,
+					// even though the class is not on the element itself.
+					const maskedText = document.createElement("span");
+					nestUnder("milana-mask", maskedText);
+					expect(rrwebOptions.maskTextFn?.("Secret", maskedText)).toBe(
+						"******",
+					);
+
+					const nestedInput = document.createElement("input");
+					nestedInput.type = "text";
+					nestUnder("milana-mask", nestedInput);
+					expect(rrwebOptions.maskInputFn?.("customer data", nestedInput)).toBe(
+						"*************",
+					);
 				});
 
 				test("high masks all inputs without globally masking text", async () => {
@@ -224,15 +257,17 @@ describe("Core Library - Init and Metrics", () => {
 					const rrwebOptions = getRrwebOptions(record);
 					expect(rrwebOptions.maskTextSelector).toBe(".sensitive");
 
+					// The selector sits on an ancestor and the masked nodes are nested
+					// below it, so masking resolves through element.closest(".sensitive").
 					const textElement = document.createElement("span");
-					textElement.className = "sensitive";
+					nestUnder("sensitive", textElement);
 					expect(rrwebOptions.maskTextFn?.("Secret", textElement)).toBe(
 						"******",
 					);
 
 					const input = document.createElement("input");
 					input.type = "text";
-					input.className = "sensitive";
+					nestUnder("sensitive", input);
 					expect(rrwebOptions.maskInputFn?.("customer data", input)).toBe(
 						"*************",
 					);
@@ -260,15 +295,18 @@ describe("Core Library - Init and Metrics", () => {
 					);
 
 					const rrwebOptions = getRrwebOptions(record);
+
+					// unmaskSelector is on an ancestor; nested nodes inherit the reveal
+					// through the ancestor walk (closest, and the block check inside it).
 					const textElement = document.createElement("span");
-					textElement.className = "public";
+					nestUnder("public", textElement);
 					expect(rrwebOptions.maskTextFn?.("Public text", textElement)).toBe(
 						"Public text",
 					);
 
 					const input = document.createElement("input");
 					input.type = "text";
-					input.className = "public";
+					nestUnder("public", input);
 					expect(rrwebOptions.maskInputFn?.("public data", input)).toBe(
 						"public data",
 					);
@@ -339,19 +377,21 @@ describe("Core Library - Init and Metrics", () => {
 					);
 
 					const rrwebOptions = getRrwebOptions(record);
-					const wrapper = document.createElement("div");
-					wrapper.className = "public";
+
+					// Nodes live below a .sensitive (mask) ancestor that is itself below
+					// a .public (unmask) ancestor. Both selectors match via the ancestor
+					// walk, and the explicit mask must still win over the unmask.
 					const textElement = document.createElement("span");
-					textElement.className = "sensitive";
-					wrapper.appendChild(textElement);
+					const maskedSubtree = nestUnder("sensitive", textElement);
+					nestUnder("public", maskedSubtree);
 					expect(rrwebOptions.maskTextFn?.("Secret", textElement)).toBe(
 						"******",
 					);
 
 					const input = document.createElement("input");
 					input.type = "text";
-					input.className = "sensitive";
-					wrapper.appendChild(input);
+					const maskedInputSubtree = nestUnder("sensitive", input);
+					nestUnder("public", maskedInputSubtree);
 					expect(rrwebOptions.maskInputFn?.("customer data", input)).toBe(
 						"*************",
 					);
