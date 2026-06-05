@@ -244,6 +244,7 @@ export type {
 	InitPrivacyOptions,
 	IntegrationName,
 	PostHogIntegrationState,
+	PrivacyMaskingLevel,
 	PublicInitOptions,
 	SentryIntegrationState,
 	SessionInfo,

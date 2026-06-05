@@ -13,7 +13,7 @@ export interface MilanaWindowApi {
 		productId: string,
 		clientKey: string,
 		info: SessionInfo,
-		options?: Partial<InitOptions>,
+		options?: PublicInitOptions,
 	): void;
 	(command: "identify", input: IdentifyInput): void;
 	(command: "update", payload: UpdatePayload): void;
@@ -46,7 +46,13 @@ export interface MilanaWindow {
 	_milanaQueue?: Array<[string, ...unknown[]]>;
 }
 
+export type PrivacyMaskingLevel = "normal" | "high" | "xhigh";
+
 export type InitPrivacyOptions = {
+	// "normal" preserves the current defaults. "high" masks all input-like
+	// values. "xhigh" masks all input-like values and all DOM text.
+	maskingLevel: PrivacyMaskingLevel;
+
 	blockClass: string | RegExp; // default: milana-block
 	blockSelector: string | null;
 
@@ -60,10 +66,22 @@ export type InitPrivacyOptions = {
 	// both text and input elements; today these are configured separately.
 	maskTextClass: string; // default: milana-mask
 	maskInputClass: string; // default: milana-mask
+	// Masks text and input values in matching subtrees. Explicit masks win over
+	// unmaskSelector.
+	maskSelector: string | null;
+	// Reveals values masked by maskingLevel — input values under "high"/"xhigh"
+	// and DOM text under "xhigh". Has no effect at "normal" (nothing is broadly
+	// masked there to reveal) and a warning is logged if set. Does not override
+	// explicit masks (maskSelector / maskTextClass), blocked elements, or the
+	// always-masked input types (password/tel/email plus maskInputTypes).
+	unmaskSelector: string | null;
 
-	// These input types are masked in addition to elements affected by
-	// maskTextClass and maskInputClass
-	maskInputTypes: Record<string, boolean>; // default: password, tel, email
+	// Additional input types to always mask, on top of the built-in
+	// always-masked types (password, tel, email). Like the built-ins, values
+	// matching these types are always masked and cannot be revealed by
+	// unmaskSelector. Keys are lowercase input `type` values, e.g.
+	// { url: true, number: true }.
+	maskInputTypes: Record<string, boolean>;
 
 	shouldTrackQueryParams: boolean;
 	// Custom patterns provided here extend (not replace) the default patterns.
@@ -130,11 +148,11 @@ export type InitOptions = {
  * Options argument to Milana.init
  */
 export type PublicInitOptions = Partial<
-	InitOptions & {
-		privacy: Partial<InitPrivacyOptions>;
-		_internal: Partial<InitInternalOptions>;
-	}
->;
+	Omit<InitOptions, "privacy" | "_internal">
+> & {
+	privacy?: Partial<InitPrivacyOptions>;
+	_internal?: Partial<InitInternalOptions>;
+};
 
 export type SessionInfo = {
 	environment: string;
