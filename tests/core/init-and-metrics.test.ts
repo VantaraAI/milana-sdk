@@ -18,6 +18,7 @@ import {
 
 type RrwebRecordOptions = {
 	maskTextSelector?: string;
+	blockClass?: string | RegExp;
 	maskInputFn?: (value: string, el: HTMLElement) => string;
 	maskTextFn?: (value: string, el: HTMLElement | null) => string;
 };
@@ -527,6 +528,28 @@ describe("Core Library - Init and Metrics", () => {
 					// The invalid selector is dropped; xhigh still masks via "*".
 					const rrwebOptions = getRrwebOptions(record);
 					expect(rrwebOptions.maskTextSelector).toBe("*");
+				});
+
+				test("strips stateful flags from a RegExp blockClass before recording", async () => {
+					const { init } = await importMilana();
+					const { record } = await import("@rrweb/record");
+					mockSampledSession("regex-blockclass-session");
+
+					await init(
+						productId,
+						clientKey,
+						{
+							environment: "test",
+							version: "1.0",
+							metadata: {},
+						},
+						{ privacy: { blockClass: /secret/g } },
+					);
+
+					const { blockClass } = getRrwebOptions(record);
+					expect(blockClass).toBeInstanceOf(RegExp);
+					expect((blockClass as RegExp).global).toBe(false);
+					expect((blockClass as RegExp).source).toBe("secret");
 				});
 			});
 		});

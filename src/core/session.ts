@@ -165,6 +165,17 @@ function normalizeSelector(
 	return trimmed;
 }
 
+// A global/sticky regex carries mutable lastIndex state across .test() calls.
+// Both this SDK and rrweb test such a matcher against individual class tokens
+// and share the same object, so a stateful flag makes matches intermittently
+// skip. Strip the stateful flags so .test() is pure.
+function withoutStatefulRegexFlags(matcher: string | RegExp): string | RegExp {
+	if (matcher instanceof RegExp && (matcher.global || matcher.sticky)) {
+		return new RegExp(matcher.source, matcher.flags.replace(/[gy]/g, ""));
+	}
+	return matcher;
+}
+
 function maskTextValue(value: string): string {
 	return value.replace(/[\S]/g, MASK_PLACEHOLDER);
 }
@@ -337,7 +348,9 @@ export class MilanaSession implements IMilanaSessionSingleton {
 
 		const privacyOptions: InitPrivacyOptions = {
 			maskingLevel,
-			blockClass: options.privacy?.blockClass ?? "milana-block",
+			blockClass: withoutStatefulRegexFlags(
+				options.privacy?.blockClass ?? "milana-block",
+			),
 			blockSelector: normalizeSelector(
 				options.privacy?.blockSelector,
 				"blockSelector",
@@ -1954,9 +1967,10 @@ export class MilanaSession implements IMilanaSessionSingleton {
 			for (const className of current.classList) {
 				if (typeof classMatcher === "string") {
 					if (className === classMatcher) return true;
-				} else {
-					classMatcher.lastIndex = 0;
-					if (classMatcher.test(className)) return true;
+					// RegExp matchers are normalized to be non-global at
+					// construction (withoutStatefulRegexFlags), so .test() is pure.
+				} else if (classMatcher.test(className)) {
+					return true;
 				}
 			}
 			current = current.parentElement;
