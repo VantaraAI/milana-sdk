@@ -567,7 +567,6 @@ describe("Core Library - TrackEvent and URL Tracking", () => {
 							ignoreSelector: null,
 							maskTextClass: "milana-mask",
 							maskInputClass: "milana-mask",
-							maskInputTypes: { password: true, tel: true, email: true },
 							shouldTrackQueryParams: true,
 							queryTrackingParamsDenyList: [
 								/^custom_secret$/i,
@@ -629,7 +628,6 @@ describe("Core Library - TrackEvent and URL Tracking", () => {
 							ignoreSelector: null,
 							maskTextClass: "milana-mask",
 							maskInputClass: "milana-mask",
-							maskInputTypes: { password: true, tel: true, email: true },
 							shouldTrackQueryParams: false,
 							queryTrackingParamsDenyList: [
 								/^jwt$/i,
@@ -684,7 +682,6 @@ describe("Core Library - TrackEvent and URL Tracking", () => {
 							ignoreSelector: null,
 							maskTextClass: "milana-mask",
 							maskInputClass: "milana-mask",
-							maskInputTypes: { password: true, tel: true, email: true },
 							shouldTrackQueryParams: false,
 							queryTrackingParamsDenyList: [
 								/^jwt$/i,
@@ -837,7 +834,6 @@ describe("Core Library - TrackEvent and URL Tracking", () => {
 							ignoreSelector: null,
 							maskTextClass: "milana-mask",
 							maskInputClass: "milana-mask",
-							maskInputTypes: { password: true, tel: true, email: true },
 							shouldTrackQueryParams: false,
 							queryTrackingParamsDenyList: [
 								/^jwt$/i,

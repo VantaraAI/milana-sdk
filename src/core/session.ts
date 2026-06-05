@@ -123,11 +123,11 @@ const TAGS_TO_MASK: Record<string, boolean> = {
 	option: true,
 };
 
-const DEFAULT_MASK_INPUT_TYPES: Record<string, boolean> = {
-	password: true,
-	tel: true,
-	email: true,
-};
+const ALWAYS_MASKED_INPUT_TYPES: ReadonlySet<string> = new Set([
+	"password",
+	"tel",
+	"email",
+]);
 
 const DEFAULT_URL_QUERY_PARAM_DENYLIST: RegExp[] = [
 	/^jwt$/i,
@@ -142,6 +142,32 @@ const DEFAULT_URL_QUERY_PARAM_DENYLIST: RegExp[] = [
 ];
 
 const MASK_PLACEHOLDER = "*";
+
+function normalizeSelector(
+	selector: string | null | undefined,
+	optionName: string,
+): string | null {
+	const trimmed = selector?.trim();
+	if (!trimmed) {
+		return null;
+	}
+
+	try {
+		// Throws SyntaxError on an invalid selector without touching the DOM.
+		document.createDocumentFragment().querySelector(trimmed);
+	} catch {
+		console.warn(
+			`Milana: Ignoring invalid privacy.${optionName} selector "${trimmed}"`,
+		);
+		return null;
+	}
+
+	return trimmed;
+}
+
+function maskTextValue(value: string): string {
+	return value.replace(/[\S]/g, MASK_PLACEHOLDER);
+}
 
 /**
  * Use one tag for all events to avoid namespacing issues
@@ -296,16 +322,31 @@ export class MilanaSession implements IMilanaSessionSingleton {
 		this.state = state;
 
 		const privacyOptions: InitPrivacyOptions = {
+			maskingLevel: options.privacy?.maskingLevel ?? "normal",
 			blockClass: options.privacy?.blockClass ?? "milana-block",
-			blockSelector: options.privacy?.blockSelector ?? null,
+			blockSelector: normalizeSelector(
+				options.privacy?.blockSelector,
+				"blockSelector",
+			),
 			ignoreClass: options.privacy?.ignoreClass ?? "milana-ignore",
-			ignoreSelector: options.privacy?.ignoreSelector ?? null,
+			ignoreSelector: normalizeSelector(
+				options.privacy?.ignoreSelector,
+				"ignoreSelector",
+			),
 			maskTextClass: options.privacy?.maskTextClass ?? "milana-mask",
 			maskInputClass: options.privacy?.maskInputClass ?? "milana-mask",
-			maskInputTypes: {
-				...DEFAULT_MASK_INPUT_TYPES,
-				...(options.privacy?.maskInputTypes ?? {}),
-			},
+			maskSelector: normalizeSelector(
+				options.privacy?.maskSelector,
+				"maskSelector",
+			),
+			unmaskSelector: normalizeSelector(
+				options.privacy?.unmaskSelector,
+				"unmaskSelector",
+			),
+			// Additional always-masked input types, layered on the built-in
+			// ALWAYS_MASKED_INPUT_TYPES. The built-ins are handled separately and
+			// cannot be disabled, so this defaults to empty.
+			maskInputTypes: { ...(options.privacy?.maskInputTypes ?? {}) },
 			shouldTrackQueryParams: options.privacy?.shouldTrackQueryParams ?? true,
 			queryTrackingParamsDenyList: [
 				...DEFAULT_URL_QUERY_PARAM_DENYLIST,
@@ -365,7 +406,7 @@ export class MilanaSession implements IMilanaSessionSingleton {
 		clientKey: string,
 		info: SessionInfo,
 		callerType: CallerType,
-		options?: Partial<InitOptions>,
+		options?: PublicInitOptions,
 	): Promise<{ success: boolean }> {
 		const session = new MilanaSession(
 			productId,
@@ -1581,6 +1622,13 @@ export class MilanaSession implements IMilanaSessionSingleton {
 		const rrwebRecordArgs = {
 			emit: (event: eventWithTime) => this.pushEvent(event),
 			maskTextClass: this.options.privacy.maskTextClass,
+			// "xhigh" masks all DOM text (rrweb has no maskAllText option, so "*"
+			// is how we select everything); otherwise only maskSelector subtrees
+			// are routed through maskTextFn.
+			maskTextSelector:
+				this.options.privacy.maskingLevel === "xhigh"
+					? "*"
+					: (this.options.privacy.maskSelector ?? undefined),
 			blockClass: this.options.privacy.blockClass,
 			blockSelector: this.options.privacy.blockSelector ?? undefined,
 			ignoreClass: this.options.privacy.ignoreClass,
@@ -1591,6 +1639,8 @@ export class MilanaSession implements IMilanaSessionSingleton {
 			maskInputOptions: TAGS_TO_MASK,
 			maskInputFn: (value: string, el: HTMLElement) =>
 				this.maskInputValue(value, el),
+			maskTextFn: (value: string, el: HTMLElement | null) =>
+				this.maskText(value, el),
 			userTriggeredOnInput: true,
 			// Periodic full snapshot so the server can split long sessions
 			// into encoder-sized windows.
@@ -1765,16 +1815,56 @@ export class MilanaSession implements IMilanaSessionSingleton {
 	}
 
 	private maskInputValue(value: string, element: HTMLElement): string {
-		const type = this.getInputType(element as HTMLInputElement);
-		const isTypeMasked = type && this.options.privacy.maskInputTypes[type];
-		if (!isTypeMasked && !this.elementOrAncestorHasMaskClass(element)) {
-			return value;
+		if (this.shouldMaskInputValue(element)) {
+			return MASK_PLACEHOLDER.repeat(value.length);
 		}
 
-		// NOTE: It might be more privacy-preserving to not reveal the length
-		// of the value but this matches rrweb built-in behavior. This should
-		// be easy enough to change later.
-		return MASK_PLACEHOLDER.repeat(value.length);
+		return value;
+	}
+
+	private shouldMaskInputValue(element: HTMLElement): boolean {
+		const type = this.getInputType(element as HTMLInputElement);
+		// Sensitive input types are always masked, before any unmask check below.
+		// password/tel/email are built in; maskInputTypes can add more. None of
+		// these can be revealed by unmaskSelector.
+		if (type && this.isAlwaysMaskedInputType(type)) {
+			return true;
+		}
+
+		if (this.elementOrAncestorIsExplicitlyMaskedForInput(element)) {
+			return true;
+		}
+
+		// "high"/"xhigh" mask every other input, but an unmasked subtree
+		// (unmaskSelector) reveals them.
+		const level = this.options.privacy.maskingLevel;
+		if (level === "high" || level === "xhigh") {
+			return !this.elementOrAncestorCanBeUnmasked(element);
+		}
+
+		return false;
+	}
+
+	private maskText(value: string, element: HTMLElement | null): string {
+		// Text is revealed only when it sits in an unmasked subtree and is not
+		// explicitly masked. Everything else — no element, an explicit mask, or
+		// not unmaskable — stays masked.
+		const reveal =
+			element !== null &&
+			!this.elementOrAncestorIsExplicitlyMaskedForText(element) &&
+			this.elementOrAncestorCanBeUnmasked(element);
+
+		return reveal ? value : maskTextValue(value);
+	}
+
+	// True for the built-in PII types plus any the customer added via
+	// maskInputTypes. `=== true` avoids matching inherited Object.prototype
+	// members for arbitrary type strings.
+	private isAlwaysMaskedInputType(type: string): boolean {
+		return (
+			ALWAYS_MASKED_INPUT_TYPES.has(type) ||
+			this.options.privacy.maskInputTypes[type] === true
+		);
 	}
 
 	private getInputType(element: HTMLInputElement) {
@@ -1787,17 +1877,94 @@ export class MilanaSession implements IMilanaSessionSingleton {
 				: null;
 	}
 
-	private elementOrAncestorHasMaskClass(element: HTMLElement): boolean {
-		const maskClass = this.options.privacy.maskInputClass;
-		if (!maskClass || maskClass.trim().length === 0) {
+	private elementOrAncestorIsExplicitlyMaskedForInput(
+		element: HTMLElement,
+	): boolean {
+		return (
+			this.elementOrAncestorHasClass(
+				element,
+				this.options.privacy.maskInputClass,
+			) ||
+			this.elementOrAncestorMatchesSelector(
+				element,
+				this.options.privacy.maskSelector,
+			)
+		);
+	}
+
+	private elementOrAncestorIsExplicitlyMaskedForText(
+		element: HTMLElement,
+	): boolean {
+		return (
+			this.elementOrAncestorHasClass(
+				element,
+				this.options.privacy.maskTextClass,
+			) ||
+			this.elementOrAncestorMatchesSelector(
+				element,
+				this.options.privacy.maskSelector,
+			)
+		);
+	}
+
+	private elementOrAncestorCanBeUnmasked(element: HTMLElement): boolean {
+		return (
+			!this.elementOrAncestorIsBlocked(element) &&
+			this.elementOrAncestorMatchesSelector(
+				element,
+				this.options.privacy.unmaskSelector,
+			)
+		);
+	}
+
+	private elementOrAncestorIsBlocked(element: HTMLElement): boolean {
+		return (
+			this.elementOrAncestorHasClass(
+				element,
+				this.options.privacy.blockClass,
+			) ||
+			this.elementOrAncestorMatchesSelector(
+				element,
+				this.options.privacy.blockSelector,
+			)
+		);
+	}
+
+	private elementOrAncestorHasClass(
+		element: HTMLElement,
+		classMatcher: string | RegExp,
+	): boolean {
+		if (typeof classMatcher === "string" && classMatcher.trim().length === 0) {
 			return false;
 		}
 
-		if (element.classList.contains(maskClass)) {
-			return true;
+		let current: HTMLElement | null = element;
+		while (current) {
+			for (const className of current.classList) {
+				if (typeof classMatcher === "string") {
+					if (className === classMatcher) return true;
+				} else {
+					classMatcher.lastIndex = 0;
+					if (classMatcher.test(className)) return true;
+				}
+			}
+			current = current.parentElement;
 		}
 
-		return element.closest(`.${maskClass}`) !== null;
+		return false;
+	}
+
+	private elementOrAncestorMatchesSelector(
+		element: HTMLElement,
+		selector: string | null,
+	): boolean {
+		if (!selector) return false;
+
+		try {
+			return element.closest(selector) !== null;
+		} catch {
+			return false;
+		}
 	}
 
 	/**

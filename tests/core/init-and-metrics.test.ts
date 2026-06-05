@@ -1,3 +1,4 @@
+import type { record as rrwebRecord } from "@rrweb/record";
 import { describe, expect, test, vi } from "vitest";
 import type { SessionPerfMetrics } from "@/core/session.ts";
 import { MILANA_CUSTOM_EVENT_TAG } from "../../src/core/session.ts";
@@ -14,6 +15,23 @@ import {
 	setupCoreTestHarness,
 	type TestSessionInternals,
 } from "./helpers";
+
+type RrwebRecordOptions = {
+	maskTextSelector?: string;
+	maskInputFn?: (value: string, el: HTMLElement) => string;
+	maskTextFn?: (value: string, el: HTMLElement | null) => string;
+};
+
+function mockSampledSession(sessionId: string): void {
+	vi.mocked(fetch).mockResolvedValueOnce({
+		ok: true,
+		json: () => Promise.resolve({ sampled: true, sessionId }),
+	} as Response);
+}
+
+function getRrwebOptions(recordFn: typeof rrwebRecord): RrwebRecordOptions {
+	return vi.mocked(recordFn).mock.calls[0]?.[0] as RrwebRecordOptions;
+}
 
 describe("Core Library - Init and Metrics", () => {
 	setupCoreTestHarness();
@@ -99,6 +117,335 @@ describe("Core Library - Init and Metrics", () => {
 					"https://custom.example.com/session",
 					expect.any(Object),
 				);
+			});
+
+			describe("Privacy masking presets", () => {
+				test("normal preserves current input and text masking behavior", async () => {
+					const { init } = await importMilana();
+					const { record } = await import("@rrweb/record");
+					mockSampledSession("normal-privacy-session");
+
+					await init(productId, clientKey, {
+						environment: "test",
+						version: "1.0",
+						metadata: {},
+					});
+
+					const rrwebOptions = getRrwebOptions(record);
+					expect(rrwebOptions.maskTextSelector).toBeUndefined();
+
+					const textInput = document.createElement("input");
+					textInput.type = "text";
+					expect(rrwebOptions.maskInputFn?.("customer data", textInput)).toBe(
+						"customer data",
+					);
+
+					const emailInput = document.createElement("input");
+					emailInput.type = "email";
+					const email = "jane@example.com";
+					expect(rrwebOptions.maskInputFn?.(email, emailInput)).toBe(
+						"*".repeat(email.length),
+					);
+				});
+
+				test("high masks all inputs without globally masking text", async () => {
+					const { init } = await importMilana();
+					const { record } = await import("@rrweb/record");
+					mockSampledSession("high-privacy-session");
+
+					await init(
+						productId,
+						clientKey,
+						{
+							environment: "test",
+							version: "1.0",
+							metadata: {},
+						},
+						{ privacy: { maskingLevel: "high" } },
+					);
+
+					const rrwebOptions = getRrwebOptions(record);
+					expect(rrwebOptions.maskTextSelector).toBeUndefined();
+
+					const input = document.createElement("input");
+					input.type = "text";
+					expect(rrwebOptions.maskInputFn?.("customer data", input)).toBe(
+						"*************",
+					);
+				});
+
+				test("xhigh masks all inputs and all DOM text", async () => {
+					const { init } = await importMilana();
+					const { record } = await import("@rrweb/record");
+					mockSampledSession("xhigh-privacy-session");
+
+					await init(
+						productId,
+						clientKey,
+						{
+							environment: "test",
+							version: "1.0",
+							metadata: {},
+						},
+						{ privacy: { maskingLevel: "xhigh" } },
+					);
+
+					const rrwebOptions = getRrwebOptions(record);
+					expect(rrwebOptions.maskTextSelector).toBe("*");
+
+					const textElement = document.createElement("p");
+					expect(rrwebOptions.maskTextFn?.("Secret text", textElement)).toBe(
+						"****** ****",
+					);
+
+					const input = document.createElement("input");
+					input.type = "text";
+					expect(rrwebOptions.maskInputFn?.("customer data", input)).toBe(
+						"*************",
+					);
+				});
+
+				test("maskSelector masks text and inputs in matching subtrees", async () => {
+					const { init } = await importMilana();
+					const { record } = await import("@rrweb/record");
+					mockSampledSession("mask-selector-session");
+
+					await init(
+						productId,
+						clientKey,
+						{
+							environment: "test",
+							version: "1.0",
+							metadata: {},
+						},
+						{ privacy: { maskSelector: ".sensitive" } },
+					);
+
+					const rrwebOptions = getRrwebOptions(record);
+					expect(rrwebOptions.maskTextSelector).toBe(".sensitive");
+
+					const textElement = document.createElement("span");
+					textElement.className = "sensitive";
+					expect(rrwebOptions.maskTextFn?.("Secret", textElement)).toBe(
+						"******",
+					);
+
+					const input = document.createElement("input");
+					input.type = "text";
+					input.className = "sensitive";
+					expect(rrwebOptions.maskInputFn?.("customer data", input)).toBe(
+						"*************",
+					);
+				});
+
+				test("unmaskSelector reveals preset-masked text and inputs", async () => {
+					const { init } = await importMilana();
+					const { record } = await import("@rrweb/record");
+					mockSampledSession("unmask-selector-session");
+
+					await init(
+						productId,
+						clientKey,
+						{
+							environment: "test",
+							version: "1.0",
+							metadata: {},
+						},
+						{
+							privacy: {
+								maskingLevel: "xhigh",
+								unmaskSelector: ".public",
+							},
+						},
+					);
+
+					const rrwebOptions = getRrwebOptions(record);
+					const textElement = document.createElement("span");
+					textElement.className = "public";
+					expect(rrwebOptions.maskTextFn?.("Public text", textElement)).toBe(
+						"Public text",
+					);
+
+					const input = document.createElement("input");
+					input.type = "text";
+					input.className = "public";
+					expect(rrwebOptions.maskInputFn?.("public data", input)).toBe(
+						"public data",
+					);
+				});
+
+				test("explicit mask wins over unmaskSelector", async () => {
+					const { init } = await importMilana();
+					const { record } = await import("@rrweb/record");
+					mockSampledSession("explicit-mask-session");
+
+					await init(
+						productId,
+						clientKey,
+						{
+							environment: "test",
+							version: "1.0",
+							metadata: {},
+						},
+						{
+							privacy: {
+								maskingLevel: "xhigh",
+								maskSelector: ".sensitive",
+								unmaskSelector: ".public",
+							},
+						},
+					);
+
+					const rrwebOptions = getRrwebOptions(record);
+					const wrapper = document.createElement("div");
+					wrapper.className = "public";
+					const textElement = document.createElement("span");
+					textElement.className = "sensitive";
+					wrapper.appendChild(textElement);
+					expect(rrwebOptions.maskTextFn?.("Secret", textElement)).toBe(
+						"******",
+					);
+
+					const input = document.createElement("input");
+					input.type = "text";
+					input.className = "sensitive";
+					wrapper.appendChild(input);
+					expect(rrwebOptions.maskInputFn?.("customer data", input)).toBe(
+						"*************",
+					);
+				});
+
+				test("password inputs remain masked under unmaskSelector", async () => {
+					const { init } = await importMilana();
+					const { record } = await import("@rrweb/record");
+					mockSampledSession("password-unmask-session");
+
+					await init(
+						productId,
+						clientKey,
+						{
+							environment: "test",
+							version: "1.0",
+							metadata: {},
+						},
+						{
+							privacy: {
+								maskingLevel: "high",
+								unmaskSelector: ".public",
+							},
+						},
+					);
+
+					const rrwebOptions = getRrwebOptions(record);
+					const input = document.createElement("input");
+					input.type = "password";
+					input.className = "public";
+					expect(rrwebOptions.maskInputFn?.("customer data", input)).toBe(
+						"*************",
+					);
+				});
+
+				test("tel and email inputs are always masked, even under unmaskSelector", async () => {
+					const { init } = await importMilana();
+					const { record } = await import("@rrweb/record");
+					mockSampledSession("always-masked-types-session");
+
+					await init(
+						productId,
+						clientKey,
+						{
+							environment: "test",
+							version: "1.0",
+							metadata: {},
+						},
+						// Default ("normal") level plus a broad unmaskSelector: the
+						// always-masked types must still not be revealed.
+						{ privacy: { unmaskSelector: ".public" } },
+					);
+
+					const rrwebOptions = getRrwebOptions(record);
+
+					const email = document.createElement("input");
+					email.type = "email";
+					email.className = "public";
+					const emailValue = "jane@example.com";
+					expect(rrwebOptions.maskInputFn?.(emailValue, email)).toBe(
+						"*".repeat(emailValue.length),
+					);
+
+					const tel = document.createElement("input");
+					tel.type = "tel";
+					tel.className = "public";
+					const telValue = "5551234567";
+					expect(rrwebOptions.maskInputFn?.(telValue, tel)).toBe(
+						"*".repeat(telValue.length),
+					);
+				});
+
+				test("maskInputTypes masks additional input types and cannot be unmasked", async () => {
+					const { init } = await importMilana();
+					const { record } = await import("@rrweb/record");
+					mockSampledSession("custom-mask-input-types-session");
+
+					await init(
+						productId,
+						clientKey,
+						{
+							environment: "test",
+							version: "1.0",
+							metadata: {},
+						},
+						{
+							privacy: {
+								maskInputTypes: { url: true },
+								unmaskSelector: ".public",
+							},
+						},
+					);
+
+					const rrwebOptions = getRrwebOptions(record);
+
+					// A custom type stays masked even inside an unmasked subtree.
+					const url = document.createElement("input");
+					url.type = "url";
+					url.className = "public";
+					const urlValue = "https://example.com";
+					expect(rrwebOptions.maskInputFn?.(urlValue, url)).toBe(
+						"*".repeat(urlValue.length),
+					);
+
+					// A type not listed remains unmasked in normal mode.
+					const text = document.createElement("input");
+					text.type = "text";
+					expect(rrwebOptions.maskInputFn?.("plain text", text)).toBe(
+						"plain text",
+					);
+				});
+
+				test("invalid privacy selectors are dropped with a warning", async () => {
+					const { init } = await importMilana();
+					const { record } = await import("@rrweb/record");
+					mockSampledSession("invalid-selector-session");
+
+					await init(
+						productId,
+						clientKey,
+						{
+							environment: "test",
+							version: "1.0",
+							metadata: {},
+						},
+						{ privacy: { maskingLevel: "xhigh", maskSelector: "[" } },
+					);
+
+					expect(console.warn).toHaveBeenCalledWith(
+						expect.stringContaining("invalid privacy.maskSelector"),
+					);
+
+					// The invalid selector is dropped; xhigh still masks via "*".
+					const rrwebOptions = getRrwebOptions(record);
+					expect(rrwebOptions.maskTextSelector).toBe("*");
+				});
 			});
 		});
 
