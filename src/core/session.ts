@@ -165,6 +165,25 @@ function normalizeSelector(
 	return trimmed;
 }
 
+// A global (/g) or sticky (/y) regex carries mutable lastIndex state across
+// .test() calls. Both this SDK and rrweb test such a matcher against individual
+// class tokens and share the same object, so a stateful flag makes matches
+// intermittently skip. Return an equivalent matcher with no stateful flags.
+//
+// Dropping /g is match-preserving (test() searches the whole token either way).
+// /y additionally anchors the match at lastIndex — which is always 0 for our
+// per-token tests — so we emulate it with a leading ^ to avoid suddenly
+// matching mid-token (e.g. "not-secret" under /secret/y).
+function withoutStatefulRegexFlags(matcher: string | RegExp): string | RegExp {
+	if (!(matcher instanceof RegExp) || (!matcher.global && !matcher.sticky)) {
+		return matcher;
+	}
+
+	const flags = matcher.flags.replace(/[gy]/g, "");
+	const source = matcher.sticky ? `^(?:${matcher.source})` : matcher.source;
+	return new RegExp(source, flags);
+}
+
 function maskTextValue(value: string): string {
 	return value.replace(/[\S]/g, MASK_PLACEHOLDER);
 }
@@ -337,7 +356,9 @@ export class MilanaSession implements IMilanaSessionSingleton {
 
 		const privacyOptions: InitPrivacyOptions = {
 			maskingLevel,
-			blockClass: options.privacy?.blockClass ?? "milana-block",
+			blockClass: withoutStatefulRegexFlags(
+				options.privacy?.blockClass ?? "milana-block",
+			),
 			blockSelector: normalizeSelector(
 				options.privacy?.blockSelector,
 				"blockSelector",
@@ -1954,9 +1975,10 @@ export class MilanaSession implements IMilanaSessionSingleton {
 			for (const className of current.classList) {
 				if (typeof classMatcher === "string") {
 					if (className === classMatcher) return true;
-				} else {
-					classMatcher.lastIndex = 0;
-					if (classMatcher.test(className)) return true;
+					// RegExp matchers are normalized to be non-stateful at
+					// construction (withoutStatefulRegexFlags), so .test() is pure.
+				} else if (classMatcher.test(className)) {
+					return true;
 				}
 			}
 			current = current.parentElement;
