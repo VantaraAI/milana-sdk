@@ -16,6 +16,7 @@ import {
 	saveSessionState,
 	setSessionId,
 } from "./session-store";
+import { maskTextValue } from "./text-mask";
 import type {
 	CallerType,
 	IMilanaSessionSingleton,
@@ -182,10 +183,6 @@ function withoutStatefulRegexFlags(matcher: string | RegExp): string | RegExp {
 	const flags = matcher.flags.replace(/[gy]/g, "");
 	const source = matcher.sticky ? `^(?:${matcher.source})` : matcher.source;
 	return new RegExp(source, flags);
-}
-
-function maskTextValue(value: string): string {
-	return value.replace(/[\S]/g, MASK_PLACEHOLDER);
 }
 
 /**
@@ -1856,7 +1853,13 @@ export class MilanaSession implements IMilanaSessionSingleton {
 
 	private maskInputValue(value: string, element: HTMLElement): string {
 		if (this.shouldMaskInputValue(element)) {
-			return MASK_PLACEHOLDER.repeat(value.length);
+			// Passwords are masked as plain asterisks: the field renders
+			// bullets regardless of content, so layout-preserving
+			// placeholders buy nothing here.
+			if (this.getInputType(element as HTMLInputElement) === "password") {
+				return MASK_PLACEHOLDER.repeat(value.length);
+			}
+			return maskTextValue(value, element);
 		}
 
 		return value;
@@ -1888,13 +1891,15 @@ export class MilanaSession implements IMilanaSessionSingleton {
 	private maskText(value: string, element: HTMLElement | null): string {
 		// Text is revealed only when it sits in an unmasked subtree and is not
 		// explicitly masked. Everything else — no element, an explicit mask, or
-		// not unmaskable — stays masked.
+		// not unmaskable — stays masked. canBeUnmasked is checked first: it
+		// short-circuits without ancestor walks when no unmaskSelector is set,
+		// and this runs for every masked text node on every serialization.
 		const reveal =
 			element !== null &&
-			!this.elementOrAncestorIsExplicitlyMaskedForText(element) &&
-			this.elementOrAncestorCanBeUnmasked(element);
+			this.elementOrAncestorCanBeUnmasked(element) &&
+			!this.elementOrAncestorIsExplicitlyMaskedForText(element);
 
-		return reveal ? value : maskTextValue(value);
+		return reveal ? value : maskTextValue(value, element);
 	}
 
 	// True for the built-in PII types plus any the customer added via
@@ -1948,7 +1953,11 @@ export class MilanaSession implements IMilanaSessionSingleton {
 	}
 
 	private elementOrAncestorCanBeUnmasked(element: HTMLElement): boolean {
+		// Selector null-check first: when no unmaskSelector is configured
+		// (the common case) nothing can ever be revealed, and the blocked
+		// ancestor walk below would be pure overhead on every masked node.
 		return (
+			this.options.privacy.unmaskSelector !== null &&
 			!this.elementOrAncestorIsBlocked(element) &&
 			(this.elementOrAncestorHasClass(
 				element,
