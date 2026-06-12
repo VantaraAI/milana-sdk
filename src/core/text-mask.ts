@@ -10,8 +10,8 @@
  *   alphabet * # _ & @ whose width (computed from canvas-measured per-font
  *   glyph advances) matches the original within WIDTH_TOLERANCE.
  * - Static (fallback, never throws): per-grapheme substitution — CJK and
- *   emoji → ＊, Latin letters → a width-class symbol, digits → 0, anything
- *   else → *. Used when measurement is unavailable or not worth it.
+ *   emoji → ＊, digits → 0, anything else → *. Used when measurement is
+ *   unavailable or not worth it.
  */
 
 const FULLWIDTH_ASTERISK = "＊";
@@ -45,7 +45,6 @@ const CJK_RE =
 // than collapsing like spaceless CJK would.
 const ARABIC_RE = /\p{scx=Arabic}/u;
 const EMOJI_RE = /\p{Extended_Pictographic}/u;
-const LATIN_LETTER_RE = /^[A-Za-z]$/;
 const DIGIT_RE = /^[0-9]$/;
 // Separator classification for the tokenizer's scan loop: whitespace and
 // hyphens are kept verbatim by both layers because they carry the
@@ -98,23 +97,6 @@ function isPreservedSeparator(grapheme: string): boolean {
 		}
 	}
 	return true;
-}
-
-// Static-layer width classes for Latin letters, derived from averaged canvas
-// advance widths across common fonts (probed in real Chrome: i/l ≈ 0.26em,
-// f/t ≈ 0.31em, s/x ≈ 0.47–0.52em, o/n ≈ 0.56em, m ≈ 0.86em). Letters not in
-// any class (most capitals, ~0.6–0.7em) map to "#". Approximate by design —
-// the fallback layer's goal is staying within a line, not exactness.
-const LETTER_WIDTH_CLASSES: ReadonlyArray<readonly [string, string]> = [
-	["iljftrIaceksvxyzJ", "*"],
-	["onuhbdgpqL", "_"],
-	["mwMW", "@"],
-];
-const LETTER_TO_BASE = new Map<string, string>();
-for (const [letters, base] of LETTER_WIDTH_CLASSES) {
-	for (const letter of letters) {
-		LETTER_TO_BASE.set(letter, base);
-	}
 }
 
 // Basis alphabet for measured placeholder construction: * # _ & @ —
@@ -202,17 +184,17 @@ function maskGrapheme(grapheme: string): string {
 	if (CJK_RE.test(grapheme) || EMOJI_RE.test(grapheme)) {
 		return FULLWIDTH_ASTERISK;
 	}
-	if (LATIN_LETTER_RE.test(grapheme)) {
-		return LETTER_TO_BASE.get(grapheme) ?? "#";
-	}
 	if (DIGIT_RE.test(grapheme)) {
 		// Digits keep their position as "0": numeric shape (prices,
 		// phone-like patterns) is part of the accepted leak surface and
 		// useful to downstream analysis.
 		return "0";
 	}
-	// Punctuation, combining-mark graphemes, and any script without
-	// dedicated handling (Greek, Cyrillic, Thai, ...).
+	// Everything else — letters, punctuation, any script. Uniform "*" by
+	// choice: per-letter width classes would track widths slightly better,
+	// but the fallback path is rare (no canvas, font failure, >200-char
+	// tokens) and a single repeated symbol keeps its output and leak
+	// surface trivial to reason about.
 	return "*";
 }
 

@@ -73,15 +73,13 @@ afterEach(() => {
 });
 
 describe("staticMaskText (layer 1)", () => {
-	test("maps Latin letters to width-class symbols", () => {
-		// S→# (capital); the lowercase letters are all in the "*" class
-		expect(staticMaskText("Secret")).toBe("#*****");
-		// w→@ (extra-wide), i/l→* (narrow)
-		expect(staticMaskText("will")).toBe("@***");
+	test("maps letters and punctuation uniformly to *", () => {
+		expect(staticMaskText("Secret")).toBe("******");
+		expect(staticMaskText("will")).toBe("****");
 	});
 
 	test("preserves all whitespace verbatim", () => {
-		expect(staticMaskText("a b\tc\nd  e")).toBe("* _\t*\n_  *");
+		expect(staticMaskText("a b\tc\nd  e")).toBe("* *\t*\n*  *");
 	});
 
 	test("maps digits to 0 and preserves hyphens", () => {
@@ -108,7 +106,7 @@ describe("staticMaskText (layer 1)", () => {
 
 	test("maps a multi-code-point emoji grapheme to a single fullwidth asterisk", () => {
 		expect(staticMaskText("👨‍👩‍👧‍👦")).toBe(FW);
-		expect(staticMaskText("hi 🎉🎉")).toBe(`_* ${FW}${FW}`);
+		expect(staticMaskText("hi 🎉🎉")).toBe(`** ${FW}${FW}`);
 	});
 
 	test("does not split surrogate pairs", () => {
@@ -228,7 +226,7 @@ describe("maskTextValue (layer 2, measured)", () => {
 	test("routes very long tokens through the static layer without measuring", () => {
 		const ctx = installFakeCanvas();
 		const token = "A".repeat(5000);
-		expect(maskTextValue(token, elementWithFont())).toBe("#".repeat(5000));
+		expect(maskTextValue(token, elementWithFont())).toBe("*".repeat(5000));
 		expect(ctx.measureText).not.toHaveBeenCalled();
 	});
 

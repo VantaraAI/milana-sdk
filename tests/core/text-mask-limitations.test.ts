@@ -70,7 +70,7 @@ describe("known limitations (pinned behavior)", () => {
 		// Thai content pipelines and long-technical-string typography.
 		const masked = maskTextValue("ab​cd", null);
 		expect(masked).not.toContain("​");
-		expect(masked).toBe("*_**_");
+		expect(masked).toBe("*****");
 	});
 
 	test("Korean is approximated, not measured: one ＊ per Hangul syllable", () => {
@@ -99,7 +99,7 @@ describe("known limitations (pinned behavior)", () => {
 		// These render as narrow text glyphs but match the emoji property, so
 		// they become a ~1em fullwidth asterisk: slight width inflation, and
 		// any word containing them routes to the static layer.
-		expect(staticMaskText("Acme©")).toBe(`#*@*${FW}`);
+		expect(staticMaskText("Acme©")).toBe(`****${FW}`);
 	});
 
 	test("keycap emoji are not Extended_Pictographic and mask narrow", () => {
@@ -122,15 +122,14 @@ describe("known limitations (pinned behavior)", () => {
 		// separators) passes through unmasked. This preserves word-length
 		// patterns — part of the accepted leak surface, and identical to the
 		// old "*"-masker's behavior.
-		expect(staticMaskText("a b　c")).toBe("* _　*");
+		expect(staticMaskText("a b　c")).toBe("* *　*");
 	});
 
-	test("scripts without dedicated handling mask to uniform-width *", () => {
-		// Greek, Cyrillic, Hebrew, Devanagari, Thai, etc. have no width-class
-		// mapping — every grapheme becomes "*" in the static layer, losing
-		// per-char width fidelity. The measured layer still width-matches
-		// them via the symbol bases, so this only degrades the no-canvas
-		// fallback path.
+	test("the static layer is uniform-width: every non-CJK grapheme becomes *", () => {
+		// The fallback layer makes no attempt at per-char width fidelity (a
+		// deliberate choice: it only runs when canvas measurement is
+		// unavailable or not worth it). The measured layer still
+		// width-matches all scripts via the symbol bases.
 		expect(staticMaskText("привет")).toBe("******");
 		expect(staticMaskText("שלום")).toBe("****");
 	});
