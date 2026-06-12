@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import {
+	isSeparatorCode,
 	maskTextValue,
 	resetTextMaskStateForTesting,
 	staticMaskText,
@@ -121,6 +122,18 @@ describe("staticMaskText (layer 1)", () => {
 
 	test("returns empty string for empty input", () => {
 		expect(staticMaskText("")).toBe("");
+	});
+});
+
+describe("isSeparatorCode", () => {
+	test("matches /[\\s-]/ exactly across the entire BMP", () => {
+		// The tokenizer classifies separators by charCode (a per-char regex
+		// test would allocate a string per character); the whitespace set is
+		// enumerated by hand, so pin it against the engine's own /\s/.
+		const re = /[\s-]/;
+		for (let code = 0; code <= 0xffff; code++) {
+			expect(isSeparatorCode(code)).toBe(re.test(String.fromCharCode(code)));
+		}
 	});
 });
 
@@ -399,7 +412,7 @@ describe("maskTextValue (layer 2, measured)", () => {
 	});
 
 	test("evicts oldest placeholder cache entries first when the cap is hit", () => {
-		// A non-recording fake context: this test masks >20k unique words and
+		// A non-recording fake context: this test masks >10k unique words and
 		// vi.fn call records would dominate the runtime.
 		let measureCalls = 0;
 		vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
@@ -411,16 +424,35 @@ describe("maskTextValue (layer 2, measured)", () => {
 		} as unknown as RenderingContext);
 		const el = elementWithFont();
 
-		// Fill past the 20k cap with unique words; the insert that hits the
-		// cap evicts the oldest half.
-		for (let i = 0; i <= 20_000; i++) {
-			maskTextValue(`w${i}`, el);
+		// Unique letter-only words (digit-bearing words are never admitted).
+		const word = (i: number) =>
+			`w${i.toString(26).replace(/[0-9]/g, (d) => "qrstuvwxyz"[Number(d)])}`;
+
+		// Fill past the per-font cap; the insert that hits the cap evicts
+		// the oldest half.
+		for (let i = 0; i <= 10_000; i++) {
+			maskTextValue(word(i), el);
 		}
 
 		const calls = measureCalls;
-		maskTextValue("w19999", el); // recent → still cached
+		maskTextValue(word(10_000), el); // recent → still cached
 		expect(measureCalls).toBe(calls);
-		maskTextValue("w0", el); // oldest → evicted, re-measured
+		maskTextValue(word(0), el); // oldest → evicted, re-measured
 		expect(measureCalls).toBeGreaterThan(calls);
+	});
+
+	test("does not admit digit-bearing words to the word cache", () => {
+		// Prices, IDs, and timestamps are high-cardinality and rarely repeat;
+		// admitting them would churn out hot prose words. They re-measure
+		// their target width each time (one call) and reuse a width-bucket
+		// placeholder.
+		const ctx = installFakeCanvas();
+		const el = elementWithFont();
+
+		maskTextValue("$1,284.50", el);
+		const calls = ctx.measureText.mock.calls.length;
+		maskTextValue("$1,284.50", el);
+		// Re-measured (cache skip) but construction-free via the bucket cache.
+		expect(ctx.measureText.mock.calls.length).toBe(calls + 1);
 	});
 });

@@ -47,12 +47,44 @@ const EMOJI_RE = /\p{Extended_Pictographic}/u;
 const LATIN_LETTER_RE = /^[A-Za-z]$/;
 const DIGIT_RE = /^[0-9]$/;
 const WHITESPACE_ONLY_RE = /^\s+$/;
-// Separators kept verbatim by both layers. Whitespace and hyphens carry the
+// Separator classification for the tokenizer's scan loop: whitespace and
+// hyphens are kept verbatim by both layers because they carry the
 // line-break opportunities the layout depends on (browsers break after
-// hyphens, so masking them away makes hyphenated tokens unbreakable and
-// re-wraps narrow columns). Hyphen positions are shape leakage of the same
-// accepted class as digit positions.
-const PRESERVED_SEPARATOR_RE = /^(?:\s+|-+)$/;
+// hyphens, so masking them away makes hyphenated tokens unbreakable in
+// narrow columns). Hyphen positions are shape leakage of the same accepted
+// class as digit positions. Classification is by charCode — the charCode
+// equivalent of /[\s-]/ — since a per-char regex test would allocate a
+// string per character. The Unicode whitespace set is enumerated by hand,
+// so it is pinned against /\s/ by a test that sweeps the entire BMP;
+// exported for that test only.
+export function isSeparatorCode(code: number): boolean {
+	if (code === 0x20 || code === 0x2d || (code >= 0x09 && code <= 0x0d)) {
+		return true;
+	}
+	if (code < 0x80) {
+		return false;
+	}
+	return (
+		code === 0xa0 ||
+		code === 0x1680 ||
+		(code >= 0x2000 && code <= 0x200a) ||
+		code === 0x2028 ||
+		code === 0x2029 ||
+		code === 0x202f ||
+		code === 0x205f ||
+		code === 0x3000 ||
+		code === 0xfeff
+	);
+}
+
+function hasSeparator(value: string): boolean {
+	for (let i = 0; i < value.length; i++) {
+		if (isSeparatorCode(value.charCodeAt(i))) {
+			return true;
+		}
+	}
+	return false;
+}
 
 // Static-layer width classes for Latin letters, derived from averaged canvas
 // advance widths across common fonts. Letters not in either set (the o/m
@@ -78,12 +110,15 @@ const graphemeSegmenter: Intl.Segmenter | null =
 		? new Intl.Segmenter(undefined, { granularity: "grapheme" })
 		: null;
 
-function splitGraphemes(value: string): string[] {
-	if (graphemeSegmenter) {
-		return Array.from(graphemeSegmenter.segment(value), (s) => s.segment);
-	}
-	return Array.from(value);
-}
+// Graphemes only differ from code points when clustering characters are
+// involved: combining marks (which include variation selectors), ZWJ,
+// regional-indicator pairs, emoji skin-tone modifiers, conjoining Hangul
+// jamo. Checked once per
+// value so the common case can iterate by code point — the segmenter
+// allocates a segment object per grapheme, which is a dominant garbage
+// source when masking unique CJK/Latin text at text-churn rates.
+const NEEDS_GRAPHEME_SEGMENTATION_RE =
+	/\u200D|[\p{M}\u1100-\u11FF\uA960-\uA97F\uD7B0-\uD7FF]|[\u{1F1E6}-\u{1F1FF}]|[\u{1F3FB}-\u{1F3FF}]/u;
 
 // Static results are font-independent, so they're cached by value alone.
 // This mostly matters for spaceless CJK: whole paragraphs arrive as one
@@ -95,6 +130,56 @@ const STATIC_CACHE_MAX_CHARS = 1_000_000;
 const staticMaskCache = new Map<string, string>();
 let staticCacheChars = 0;
 
+// Admission control for the static cache. Under text churn most values are
+// seen exactly once, and caching them promotes short-lived strings into the
+// old generation at a steady rate — which is what drives major-GC pauses on
+// long sessions. A value is only cached on its second sighting, tracked by
+// a numeric hash so first sightings allocate nothing. A hash collision just
+// admits a value one sighting early, which is harmless.
+const STATIC_SEEN_MAX_ENTRIES = 8_192;
+const staticSeenOnce = new Set<number>();
+
+function fnv1a(value: string): number {
+	let hash = 0x811c9dc5;
+	for (let i = 0; i < value.length; i++) {
+		hash ^= value.charCodeAt(i);
+		hash = Math.imul(hash, 0x01000193);
+	}
+	return hash;
+}
+
+function maskGrapheme(grapheme: string): string {
+	if (WHITESPACE_ONLY_RE.test(grapheme)) {
+		// Whitespace is kept verbatim: it carries the line-break
+		// opportunities the layout depends on and is not sensitive.
+		return grapheme;
+	}
+	if (CJK_RE.test(grapheme) || EMOJI_RE.test(grapheme)) {
+		return FULLWIDTH_ASTERISK;
+	}
+	if (LATIN_LETTER_RE.test(grapheme)) {
+		return NARROW_LETTERS.has(grapheme)
+			? "\u2022"
+			: MEDIUM_LETTERS.has(grapheme)
+				? "*"
+				: "#";
+	}
+	if (DIGIT_RE.test(grapheme)) {
+		// Digits keep their position as "0": numeric shape (prices,
+		// phone-like patterns) is part of the accepted leak surface and
+		// useful to downstream analysis.
+		return "0";
+	}
+	if (grapheme === "-") {
+		// Hyphens are preserved: they carry break opportunities (see
+		// isSeparatorCode).
+		return "-";
+	}
+	// Punctuation, combining-mark graphemes, and any script without
+	// dedicated handling (Greek, Cyrillic, Thai, ...).
+	return "*";
+}
+
 /** Layer 1: static width-class masking. Never throws, needs no DOM access. */
 export function staticMaskText(value: string): string {
 	const cached = staticMaskCache.get(value);
@@ -103,46 +188,39 @@ export function staticMaskText(value: string): string {
 	}
 
 	let result = "";
-	for (const grapheme of splitGraphemes(value)) {
-		if (WHITESPACE_ONLY_RE.test(grapheme)) {
-			// Whitespace is kept verbatim: it carries the line-break
-			// opportunities the layout depends on and is not sensitive.
-			result += grapheme;
-		} else if (CJK_RE.test(grapheme) || EMOJI_RE.test(grapheme)) {
-			result += FULLWIDTH_ASTERISK;
-		} else if (LATIN_LETTER_RE.test(grapheme)) {
-			result += NARROW_LETTERS.has(grapheme)
-				? "•"
-				: MEDIUM_LETTERS.has(grapheme)
-					? "*"
-					: "#";
-		} else if (DIGIT_RE.test(grapheme)) {
-			// Digits keep their position as "0": numeric shape (prices,
-			// phone-like patterns) is part of the accepted leak surface and
-			// useful to downstream analysis.
-			result += "0";
-		} else if (grapheme === "-") {
-			// See PRESERVED_SEPARATOR_RE: hyphens carry break opportunities.
-			result += "-";
-		} else {
-			// Punctuation, combining-mark graphemes, and any script without
-			// dedicated handling (Greek, Cyrillic, Thai, …).
-			result += "*";
+	if (graphemeSegmenter && NEEDS_GRAPHEME_SEGMENTATION_RE.test(value)) {
+		for (const segment of graphemeSegmenter.segment(value)) {
+			result += maskGrapheme(segment.segment);
+		}
+	} else {
+		// Per code point (a string iterator yields whole surrogate pairs, so
+		// emoji stay intact; only multi-code-point clusters need the
+		// segmenter, and those were excluded above).
+		for (const grapheme of value) {
+			result += maskGrapheme(grapheme);
 		}
 	}
 
-	staticCacheChars += value.length + result.length;
-	staticMaskCache.set(value, result);
-	if (staticCacheChars > STATIC_CACHE_MAX_CHARS) {
-		// Evict oldest-first (Map preserves insertion order) down to half the
-		// budget so recently used entries survive.
-		for (const [key, masked] of staticMaskCache) {
-			staticMaskCache.delete(key);
-			staticCacheChars -= key.length + masked.length;
-			if (staticCacheChars <= STATIC_CACHE_MAX_CHARS / 2) {
-				break;
+	const hash = fnv1a(value);
+	if (staticSeenOnce.has(hash)) {
+		staticCacheChars += value.length + result.length;
+		staticMaskCache.set(value, result);
+		if (staticCacheChars > STATIC_CACHE_MAX_CHARS) {
+			// Evict oldest-first (Map preserves insertion order) down to half
+			// the budget so recently used entries survive.
+			for (const [key, masked] of staticMaskCache) {
+				staticMaskCache.delete(key);
+				staticCacheChars -= key.length + masked.length;
+				if (staticCacheChars <= STATIC_CACHE_MAX_CHARS / 2) {
+					break;
+				}
 			}
 		}
+	} else {
+		if (staticSeenOnce.size >= STATIC_SEEN_MAX_ENTRIES) {
+			staticSeenOnce.clear();
+		}
+		staticSeenOnce.add(hash);
 	}
 	return result;
 }
@@ -153,8 +231,8 @@ type FontSpec = {
 	font: string;
 	letterSpacing: string;
 	textTransform: string;
-	// `font|letterSpacing|textTransform`, precomputed once per element so the
-	// per-word cache-key concatenation stays cheap on hot paths.
+	// `font|letterSpacing|textTransform`, precomputed once per element and
+	// used as the key for the per-font caches below.
 	key: string;
 };
 
@@ -172,14 +250,22 @@ const elementFontCache = new WeakMap<
 	HTMLElement,
 	{ spec: FontSpec | null; expiresAt: number }
 >();
-const placeholderCache = new Map<string, string>();
-// Bounds memory on pathological pages (e.g. unique prices/IDs as words).
-// Entries are short (font string + word + placeholder, ≲200 chars), so the
-// cap keeps worst-case cache memory in the single-digit MB; typical pages
-// hold a few hundred entries. The caches live for the page lifetime — the
-// element font cache is a WeakMap, so its entries go away with their
-// elements.
-const PLACEHOLDER_CACHE_MAX_ENTRIES = 20_000;
+// Word-keyed placeholder caches, one inner map per font spec, so the
+// per-word cache key is the word string itself. (A flat map keyed by
+// `font|word` would allocate a concatenated key per token — at text-churn
+// rates that alone produced hundreds of thousands of string allocations per
+// second and measurable GC pressure.) Bounds keep worst-case memory in the
+// single-digit MB; typical pages hold a few hundred entries. The caches
+// live for the page lifetime — the element font cache is a WeakMap, so its
+// entries go away with their elements.
+const placeholderCache = new Map<string, Map<string, string>>();
+const PLACEHOLDER_CACHE_MAX_FONTS = 50;
+const PLACEHOLDER_CACHE_MAX_WORDS_PER_FONT = 10_000;
+// Digit-bearing words (prices, IDs, timestamps, dates) are high-cardinality
+// and rarely repeat: admitting them to the word cache would evict hot prose
+// words and run the eviction loop continuously under churn. They are served
+// by the width-bucket cache instead, at the cost of one measureText.
+const CONTAINS_DIGIT_RE = /[0-9]/;
 
 // Placeholders are additionally cached by quantized target width, per font
 // spec. Under text churn (counters, tickers, live logs re-rendering every
@@ -427,7 +513,26 @@ function buildMeasuredPlaceholder(
 	return render(best);
 }
 
-function maskWordMeasured(word: string, spec: FontSpec): string {
+// Returns the word-keyed placeholder cache for one font spec; callers
+// resolve it once per masked value rather than once per word.
+function wordCacheFor(specKey: string): Map<string, string> {
+	let words = placeholderCache.get(specKey);
+	if (!words) {
+		if (placeholderCache.size >= PLACEHOLDER_CACHE_MAX_FONTS) {
+			// Pathological font diversity; wholesale clear is fine this rarely.
+			placeholderCache.clear();
+		}
+		words = new Map();
+		placeholderCache.set(specKey, words);
+	}
+	return words;
+}
+
+function maskWordMeasured(
+	word: string,
+	spec: FontSpec,
+	words: Map<string, string>,
+): string {
 	// CJK, emoji, and Arabic go straight to the static layer (see the regex
 	// comments above for why), as do very long tokens (see
 	// MAX_MEASURED_WORD_LENGTH).
@@ -440,8 +545,7 @@ function maskWordMeasured(word: string, spec: FontSpec): string {
 		return staticMaskText(word);
 	}
 
-	const cacheKey = `${spec.key}|${word}`;
-	const cached = placeholderCache.get(cacheKey);
+	const cached = words.get(word);
 	if (cached !== undefined) {
 		return cached;
 	}
@@ -485,17 +589,19 @@ function maskWordMeasured(word: string, spec: FontSpec): string {
 	}
 	const result = placeholder ?? staticMaskText(word);
 
-	if (placeholderCache.size >= PLACEHOLDER_CACHE_MAX_ENTRIES) {
-		// Evict oldest-first (Map preserves insertion order) down to half, so
-		// hot common-word entries don't all vanish at once.
-		for (const key of placeholderCache.keys()) {
-			placeholderCache.delete(key);
-			if (placeholderCache.size <= PLACEHOLDER_CACHE_MAX_ENTRIES / 2) {
-				break;
+	if (!CONTAINS_DIGIT_RE.test(word)) {
+		if (words.size >= PLACEHOLDER_CACHE_MAX_WORDS_PER_FONT) {
+			// Evict oldest-first (Map preserves insertion order) down to
+			// half, so hot common-word entries don't all vanish at once.
+			for (const key of words.keys()) {
+				words.delete(key);
+				if (words.size <= PLACEHOLDER_CACHE_MAX_WORDS_PER_FONT / 2) {
+					break;
+				}
 			}
 		}
+		words.set(word, result);
 	}
-	placeholderCache.set(cacheKey, result);
 	return result;
 }
 
@@ -513,17 +619,38 @@ export function maskTextValue(
 		return staticMaskText(value);
 	}
 
-	// Tokenize keeping whitespace and hyphen separators verbatim (see
-	// PRESERVED_SEPARATOR_RE). Splitting at hyphens also width-matches each
-	// segment of a hyphenated token independently.
-	return value
-		.split(/(\s+|-+)/u)
-		.map((token) =>
-			token === "" || PRESERVED_SEPARATOR_RE.test(token)
-				? token
-				: maskWordMeasured(token, spec),
-		)
-		.join("");
+	// Tokenize keeping whitespace and hyphen separators verbatim — they
+	// carry the line-break opportunities the layout depends on. Splitting at
+	// hyphens also width-matches each segment of a hyphenated token
+	// independently. Hand-rolled scan instead of split/map/join: those
+	// allocate several arrays per call, which is a measurable share of GC
+	// pressure at text-churn rates.
+	const length = value.length;
+	if (length === 0) {
+		return value;
+	}
+	const words = wordCacheFor(spec.key);
+	// Single-token fast path (labels, table cells): no slicing at all.
+	if (!hasSeparator(value)) {
+		return maskWordMeasured(value, spec, words);
+	}
+	let result = "";
+	let index = 0;
+	while (index < length) {
+		const start = index;
+		if (isSeparatorCode(value.charCodeAt(index))) {
+			do {
+				index++;
+			} while (index < length && isSeparatorCode(value.charCodeAt(index)));
+			result += value.slice(start, index);
+		} else {
+			do {
+				index++;
+			} while (index < length && !isSeparatorCode(value.charCodeAt(index)));
+			result += maskWordMeasured(value.slice(start, index), spec, words);
+		}
+	}
+	return result;
 }
 
 /** Test-only: reset module-level caches and canvas state. */
@@ -532,6 +659,7 @@ export function resetTextMaskStateForTesting(): void {
 	widthBucketCache.clear();
 	widthBucketEntries = 0;
 	staticMaskCache.clear();
+	staticSeenOnce.clear();
 	staticCacheChars = 0;
 	measureCtx = undefined;
 	appliedFont = null;
