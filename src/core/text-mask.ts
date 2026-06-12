@@ -290,6 +290,49 @@ const WIDTH_BUCKET_CACHE_MAX_ENTRIES = 20_000;
 const widthBucketCache = new Map<string, Map<number, string>>();
 let widthBucketEntries = 0;
 
+// Per-font advances of the BASES glyphs, ordered widest-first. Measured once
+// per font spec from a run of ADVANCE_REF_RUN glyphs — runs of identical
+// symbols have no kerning, so run width divided by run length gives the
+// per-glyph advance including any canvas letterSpacing (which a single-glyph
+// measurement would miscount). All candidate widths during construction are
+// then computed arithmetically from these advances: construction costs zero
+// measureText calls, which is what dominated cold-pass time when every
+// candidate string was measured individually.
+type BaseAdvance = { base: string; advance: number };
+const ADVANCE_REF_RUN = 20;
+const baseAdvanceCache = new Map<string, BaseAdvance[] | null>();
+
+function baseAdvancesFor(
+	spec: FontSpec,
+	ctx: CanvasRenderingContext2D,
+): BaseAdvance[] | null {
+	const cached = baseAdvanceCache.get(spec.key);
+	if (cached !== undefined) {
+		return cached;
+	}
+	if (baseAdvanceCache.size >= PLACEHOLDER_CACHE_MAX_FONTS) {
+		baseAdvanceCache.clear();
+	}
+	const advances = BASES.map((base) => {
+		const single = ctx.measureText(base).width;
+		const advance =
+			ctx.measureText(base.repeat(ADVANCE_REF_RUN)).width / ADVANCE_REF_RUN;
+		// An honest font measures a run at ~run-length × the single-glyph
+		// width (identical symbols don't kern; letterSpacing inflates both
+		// sides equally). A run-derived advance far below the single glyph
+		// means sublinear metrics — clamped/saturating measureText from
+		// canvas-fingerprinting extensions or broken polyfills — and any
+		// width computed from them would be garbage.
+		const sublinear = advance < single * 0.5;
+		return { base, advance, sublinear };
+	}).sort((a, b) => b.advance - a.advance);
+	const result = advances.some((a) => a.advance <= 0.05 || a.sublinear)
+		? null
+		: advances.map(({ base, advance }) => ({ base, advance }));
+	baseAdvanceCache.set(spec.key, result);
+	return result;
+}
+
 let measureCtx: CanvasRenderingContext2D | null | undefined;
 // The font/letterSpacing last successfully applied to measureCtx, so
 // repeated measurements under one font skip the assign-and-verify dance.
@@ -412,78 +455,51 @@ function applyTextTransform(text: string, transform: string): string {
 // Candidates are built only from BASES, which are case-invariant, so no
 // text-transform is applied here — only the target word's measurement (done
 // by the caller) needs the transform.
+//
+// Construction is pure arithmetic over the per-font base advances: candidate
+// width is the dot product of glyph counts and advances, never a measureText
+// call. Runs of identical symbols carry no kerning and the (at most two)
+// boundaries between different bases contribute sub-0.1px error, validated by
+// the real-browser wrap-fidelity harness.
 function buildMeasuredPlaceholder(
 	target: number,
-	ctx: CanvasRenderingContext2D,
+	advances: BaseAdvance[],
 ): string | null {
-	const measure = (text: string) => ctx.measureText(text).width;
+	// Absolute glyph cap. Tokens on the measured path are at most
+	// MAX_MEASURED_WORD_LENGTH chars, and every base advance is wider than
+	// the narrowest original glyph in practice, so a sane placeholder never
+	// exceeds the original's length by much. Exceeding double means the
+	// metrics are bogus (e.g. saturating measureText shrank the advances) →
+	// static layer, instead of allocating a giant string.
+	const maxGlyphs = MAX_MEASURED_WORD_LENGTH * 2;
 
-	// Single-base widths are used only for ordering and count estimates;
-	// candidates are always measured as whole strings.
-	const ordered = BASES.map((base) => ({ base, width: measure(base) })).sort(
-		(a, b) => b.width - a.width,
-	);
-	if (ordered.some((b) => b.width <= 0.05)) {
-		// Degenerate metrics (font not really applied); measuring would loop.
+	// Greedy fill widest-first up to target + tolerance.
+	const counts: number[] = advances.map(() => 0);
+	let width = 0;
+	let totalGlyphs = 0;
+	for (let i = 0; i < advances.length; i++) {
+		const n = Math.floor(
+			(target + WIDTH_TOLERANCE - width) / advances[i].advance,
+		);
+		if (n <= 0) {
+			continue;
+		}
+		counts[i] = n;
+		width += n * advances[i].advance;
+		totalGlyphs += n;
+	}
+	if (totalGlyphs > maxGlyphs) {
 		return null;
 	}
 
-	// Hard budget on placeholder glyph count. Clamped/saturating measureText
-	// (canvas-fingerprinting extensions, broken polyfills) reports widths
-	// that stop growing as the candidate grows, which would otherwise make
-	// the fill loop below append glyphs forever on the customer's main
-	// thread. Hitting the budget means metrics are unusable → static layer.
-	// BASES are single UTF-16 code units, so placeholder.length is the glyph
-	// count.
-	const maxGlyphs =
-		Math.ceil(target / ordered[ordered.length - 1].width) * 2 + 8;
-
-	// Greedy fill widest-first: jump to an estimate from the single-glyph
-	// width, then correct against whole-string measurements (kerning and
-	// letter-spacing make the estimate inexact). The candidate string is
-	// grown/shrunk incrementally rather than re-rendered per measurement —
-	// this loop runs on every placeholder construction, and per-measurement
-	// rebuild garbage is what caused major-GC pauses under text churn.
-	const counts: number[] = ordered.map(() => 0);
-	let placeholder = "";
-	let width = 0;
-	for (let i = 0; i < ordered.length; i++) {
-		const { base, width: baseWidth } = ordered[i];
-		const room = target - width;
-		if (room < baseWidth) {
-			continue;
-		}
-		const jump = Math.min(
-			Math.floor(room / baseWidth),
-			maxGlyphs - placeholder.length,
-		);
-		placeholder += base.repeat(jump);
-		counts[i] += jump;
-		width = measure(placeholder);
-		while (counts[i] > 0 && width > target + WIDTH_TOLERANCE) {
-			placeholder = placeholder.slice(0, -1);
-			counts[i]--;
-			width = measure(placeholder);
-		}
-		let widthBeforeAppend = width;
-		do {
-			widthBeforeAppend = width;
-			placeholder += base;
-			counts[i]++;
-			if (placeholder.length > maxGlyphs) {
-				return null;
-			}
-			width = measure(placeholder);
-		} while (width <= target + WIDTH_TOLERANCE);
-		placeholder = placeholder.slice(0, -1);
-		counts[i]--;
-		width = widthBeforeAppend;
-	}
-
 	// Hill-climb single ±1 tweaks toward the smallest absolute width error.
-	const render = (c: number[]) =>
-		ordered.map((o, i) => o.base.repeat(c[i])).join("");
-	const widthOf = (c: number[]) => measure(render(c));
+	const widthOf = (c: number[]) => {
+		let w = 0;
+		for (let i = 0; i < c.length; i++) {
+			w += c[i] * advances[i].advance;
+		}
+		return w;
+	};
 	let best = counts;
 	let bestError = Math.abs(width - target);
 	for (
@@ -492,7 +508,7 @@ function buildMeasuredPlaceholder(
 		iteration++
 	) {
 		let improved = false;
-		for (let i = 0; i < ordered.length; i++) {
+		for (let i = 0; i < advances.length; i++) {
 			for (const delta of [1, -1]) {
 				const candidate = best.slice();
 				candidate[i] += delta;
@@ -517,7 +533,11 @@ function buildMeasuredPlaceholder(
 		// Never return an empty mask — use one narrowest base instead.
 		best[best.length - 1] = 1;
 	}
-	return render(best);
+	let placeholder = "";
+	for (let i = 0; i < best.length; i++) {
+		placeholder += advances[i].base.repeat(best[i]);
+	}
+	return placeholder;
 }
 
 // Returns the word-keyed placeholder cache for one font spec; callers
@@ -561,8 +581,9 @@ function maskWordMeasured(
 	}
 
 	const ctx = getConfiguredCtx(spec);
+	const advances = ctx ? baseAdvancesFor(spec, ctx) : null;
 	let placeholder: string | null = null;
-	if (ctx) {
+	if (ctx && advances) {
 		const target = ctx.measureText(
 			applyTextTransform(word, spec.textTransform),
 		).width;
@@ -573,7 +594,7 @@ function maskWordMeasured(
 		let byWidth = widthBucketCache.get(spec.key);
 		placeholder = byWidth?.get(bucket) ?? null;
 		if (placeholder === null) {
-			placeholder = buildMeasuredPlaceholder(target, ctx);
+			placeholder = buildMeasuredPlaceholder(target, advances);
 			if (placeholder !== null) {
 				if (widthBucketEntries >= WIDTH_BUCKET_CACHE_MAX_ENTRIES) {
 					// Wholesale clear is fine here: entries are width-keyed, so
@@ -667,6 +688,7 @@ export function resetTextMaskStateForTesting(): void {
 	placeholderCache.clear();
 	widthBucketCache.clear();
 	widthBucketEntries = 0;
+	baseAdvanceCache.clear();
 	staticMaskCache.clear();
 	staticSeenOnce.clear();
 	staticCacheChars = 0;
