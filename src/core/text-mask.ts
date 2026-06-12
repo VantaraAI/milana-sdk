@@ -10,8 +10,8 @@
  *   alphabet * # _ & @ whose width (computed from canvas-measured per-font
  *   glyph advances) matches the original within WIDTH_TOLERANCE.
  * - Static (fallback, never throws): per-grapheme substitution — CJK and
- *   emoji → ＊, digits → 0, anything else → *. Used when measurement is
- *   unavailable or not worth it.
+ *   emoji → ＊, anything else → *. Used when measurement is unavailable or
+ *   not worth it.
  */
 
 const FULLWIDTH_ASTERISK = "＊";
@@ -45,13 +45,13 @@ const CJK_RE =
 // than collapsing like spaceless CJK would.
 const ARABIC_RE = /\p{scx=Arabic}/u;
 const EMOJI_RE = /\p{Extended_Pictographic}/u;
-const DIGIT_RE = /^[0-9]$/;
+
 // Separator classification for the tokenizer's scan loop: whitespace and
 // hyphens are kept verbatim by both layers because they carry the
 // line-break opportunities the layout depends on (browsers break after
 // hyphens, so masking them away makes hyphenated tokens unbreakable in
-// narrow columns). Hyphen positions are shape leakage of the same accepted
-// class as digit positions. Classification is by charCode — the charCode
+// narrow columns). Hyphen positions are accepted shape leakage.
+// Classification is by charCode — the charCode
 // equivalent of /[\s-]/ — since a per-char regex test would allocate a
 // string per character. The Unicode whitespace set is enumerated by hand,
 // so it is pinned against /\s/ by a test that sweeps the entire BMP;
@@ -106,23 +106,15 @@ function isPreservedSeparator(grapheme: string): boolean {
 //    subset webfonts, so placeholders never mix in fallback-font glyphs
 //    (which would perturb line height and diverge between the recording and
 //    replay machines).
-// 2. UAX#14 line-break class AL — the *formal* letter class, not just
-//    empirically letter-like in Chrome. Placeholders must wrap exactly like
-//    the words they replace in every engine and every word-break mode:
-//    grawlix-style candidates (' ! $ %) and | passed normal-wrap probes in
-//    Chrome but are formally quote/exclamation/prefix/postfix/break-after
-//    class, and under word-break:break-all their runs stay unbreakable
-//    while real words gain per-glyph break points — measured as multi-line
-//    height drift by .context/browser-validation/wrap-modes-probe.mjs.
-//    (ascii-probe.mjs also disqualified "?", which allows breaks against
-//    adjacent letters even in normal mode.)
+// 2. UAX#14 line-break class AL — the formal letter class. Placeholders
+//    must wrap exactly like the words they replace in every engine and
+//    every word-break mode; in particular, word-break:break-all gives
+//    letter-class runs the same per-glyph break points as real words,
+//    while other symbol classes (quote/prefix/postfix/...) would stay
+//    unbreakable there and drift the wrapped height.
 // 3. Advance spread for width composition: ~0.35em (*) to ~0.93em (@), all
 //    case-invariant under text-transform, all reading as obviously masked
-//    even in homogeneous runs ("****", "@@@@"). The backtick — the only
-//    other AL-class ASCII symbol, and the only sub-* candidate — was
-//    rejected here: its advance varies wildly across fonts (0.22em in
-//    Arial, ~0.48em in Georgia) and long words fitted mostly from
-//    backticks read as rendering corruption rather than masking.
+//    even in homogeneous runs ("****", "@@@@").
 //
 // Listed in PREFERENCE order, not width order: baseAdvancesFor drops bases
 // whose advance nearly duplicates an earlier-listed one (they add no
@@ -166,6 +158,9 @@ let staticCacheChars = 0;
 const STATIC_SEEN_MAX_ENTRIES = 8_192;
 const staticSeenOnce = new Set<number>();
 
+// 32-bit FNV-1a string hash. Used by the static cache's admission control
+// to remember "seen once" values as numbers instead of retaining the
+// strings themselves.
 function fnv1a(value: string): number {
 	let hash = 0x811c9dc5;
 	for (let i = 0; i < value.length; i++) {
@@ -184,17 +179,11 @@ function maskGrapheme(grapheme: string): string {
 	if (CJK_RE.test(grapheme) || EMOJI_RE.test(grapheme)) {
 		return FULLWIDTH_ASTERISK;
 	}
-	if (DIGIT_RE.test(grapheme)) {
-		// Digits keep their position as "0": numeric shape (prices,
-		// phone-like patterns) is part of the accepted leak surface and
-		// useful to downstream analysis.
-		return "0";
-	}
-	// Everything else — letters, punctuation, any script. Uniform "*" by
-	// choice: per-letter width classes would track widths slightly better,
-	// but the fallback path is rare (no canvas, font failure, >200-char
-	// tokens) and a single repeated symbol keeps its output and leak
-	// surface trivial to reason about.
+	// Everything else — letters, digits, punctuation, any script. Uniform
+	// "*" by choice: per-character width classes would track widths slightly
+	// better, but the fallback path is rare (no canvas, font failure,
+	// >200-char tokens) and a single repeated symbol keeps its output and
+	// leak surface trivial to reason about.
 	return "*";
 }
 

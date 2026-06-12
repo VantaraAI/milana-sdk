@@ -360,8 +360,8 @@ export class MilanaSession implements IMilanaSessionSingleton {
 
 		const privacyOptions: InitPrivacyOptions = {
 			maskingLevel,
-			layoutPreservingMasking:
-				options.privacy?.layoutPreservingMasking ?? false,
+			shouldUseLayoutPreservingMasking:
+				options.privacy?.shouldUseLayoutPreservingMasking ?? false,
 			blockClass: withoutStatefulRegexFlags(
 				options.privacy?.blockClass ?? "milana-block",
 			),
@@ -1869,10 +1869,10 @@ export class MilanaSession implements IMilanaSessionSingleton {
 	}
 
 	// Masks a value with the configured strategy: width-matched placeholders
-	// (see text-mask.ts) behind privacy.layoutPreservingMasking, otherwise the
-	// legacy masker that turns every non-whitespace character into "*".
+	// (see text-mask.ts) behind privacy.shouldUseLayoutPreservingMasking,
+	// otherwise every non-whitespace character becomes "*".
 	private maskValue(value: string, element: HTMLElement | null): string {
-		if (this.options.privacy.layoutPreservingMasking) {
+		if (this.options.privacy.shouldUseLayoutPreservingMasking) {
 			return maskTextValue(value, element);
 		}
 		return value.replace(/\S/g, MASK_PLACEHOLDER);

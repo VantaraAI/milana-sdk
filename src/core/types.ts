@@ -56,10 +56,10 @@ export type InitPrivacyOptions = {
 	// How masked values are rendered (maskingLevel controls what gets masked;
 	// this controls how). When true, masked text becomes width-matched
 	// placeholders (see text-mask.ts) so masked replays keep their layout and
-	// clicks land where they happened. When false, the legacy masker turns
-	// every non-whitespace character into "*", which re-wraps text and can
-	// shift replay layout. Default off while the feature rolls out.
-	layoutPreservingMasking: boolean;
+	// clicks land where they happened. When false, every non-whitespace
+	// character is masked as "*", which re-wraps text and can shift replay
+	// layout. Default off while the feature rolls out.
+	shouldUseLayoutPreservingMasking: boolean;
 
 	blockClass: string | RegExp; // default: milana-block
 	blockSelector: string | null;

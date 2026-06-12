@@ -35,10 +35,17 @@
  *   full-width) are not simulated during measurement: the original is
  *   measured untransformed, so placeholder widths drift under such styles.
  *   (See applyTextTransform in text-mask.ts.)
- * - Placeholder width is a local optimum: the greedy + hill-climb
- *   construction can settle within roughly half the narrowest basis glyph
- *   (~2px at 16px font) of the target when no exact basis combination
- *   exists. Razor-edge wrap deltas only; non-accumulating across words.
+ * - hyphens: auto — dictionary hyphenation gives the browser break points
+ *   inside real words, and placeholder runs are not dictionary words, so
+ *   masked text loses every hyphenation point and under-wraps (probed at up
+ *   to ~5 fewer lines on a narrow hyphenated column; see
+ *   .context/browser-validation/wrap-modes-probe.mjs). Same family as the
+ *   soft-hyphen pin below. Rare in app UIs; common in long-form publishing.
+ * - Placeholder width is a local optimum: the multi-start greedy +
+ *   hill-climb construction can settle within roughly half the narrowest
+ *   basis glyph (~3px at 16px font) of the target when no exact basis
+ *   combination exists. Razor-edge wrap deltas only; non-accumulating
+ *   across words.
  */
 import { beforeEach, describe, expect, test } from "vitest";
 import {
@@ -109,10 +116,11 @@ describe("known limitations (pinned behavior)", () => {
 		expect(staticMaskText("1️⃣")).toBe("*");
 	});
 
-	test("tokens narrower than the narrowest basis glyph overshoot", () => {
-		// Lone thin punctuation (".", ",", "|") must produce a non-empty mask,
-		// so it gets one narrowest basis glyph even when that is wider than
-		// the original: per-token overshoot of a few px.
+	test("tokens narrower than the narrowest mask glyph overshoot", () => {
+		// Lone thin punctuation (".", ",", "|") must produce a non-empty mask:
+		// the measured layer floors at one narrowest basis glyph (~0.35em) and
+		// the static layer substitutes "*", both wider than the original —
+		// per-token overshoot of a few px.
 		const masked = maskTextValue(".", null);
 		expect(masked.length).toBeGreaterThan(0);
 	});

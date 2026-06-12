@@ -82,8 +82,8 @@ describe("staticMaskText (layer 1)", () => {
 		expect(staticMaskText("a b\tc\nd  e")).toBe("* *\t*\n*  *");
 	});
 
-	test("maps digits to 0 and preserves hyphens", () => {
-		expect(staticMaskText("call 555-1234")).toBe("**** 000-0000");
+	test("masks digits like any other character and preserves hyphens", () => {
+		expect(staticMaskText("call 555-1234")).toBe("**** ***-****");
 	});
 
 	test("maps CJK graphemes to fullwidth asterisks", () => {
