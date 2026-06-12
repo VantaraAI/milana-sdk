@@ -1,7 +1,7 @@
 {
 	"name": "milana-js",
 	"version": "1.0.19",
-	"description": "Milana SDK — session recording and analytics for web applications",
+	"description": "Milana SDK \u2014 session recording and analytics for web applications",
 	"keywords": [
 		"session-recording",
 		"analytics",
@@ -96,5 +96,10 @@
 	},
 	"lint-staged": {
 		"*.{ts,tsx,js,mjs,cjs,json,jsonc}": "biome check --write --no-errors-on-unmatched"
+	},
+	"pnpm": {
+		"overrides": {
+			"esbuild": ">=0.28.1"
+		}
 	}
 }
