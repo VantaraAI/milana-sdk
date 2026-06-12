@@ -64,15 +64,15 @@ export function isSeparatorCode(code: number): boolean {
 		return false;
 	}
 	return (
-		code === 0xa0 ||
-		code === 0x1680 ||
-		(code >= 0x2000 && code <= 0x200a) ||
-		code === 0x2028 ||
-		code === 0x2029 ||
-		code === 0x202f ||
-		code === 0x205f ||
-		code === 0x3000 ||
-		code === 0xfeff
+		code === 0xa0 || // no-break space
+		code === 0x1680 || // ogham space mark
+		(code >= 0x2000 && code <= 0x200a) || // en quad through hair space
+		code === 0x2028 || // line separator
+		code === 0x2029 || // paragraph separator
+		code === 0x202f || // narrow no-break space
+		code === 0x205f || // medium mathematical space
+		code === 0x3000 || // ideographic space (CJK)
+		code === 0xfeff // zero-width no-break space (BOM)
 	);
 }
 
@@ -152,9 +152,14 @@ let staticCacheChars = 0;
 // Admission control for the static cache. Under text churn most values are
 // seen exactly once, and caching them promotes short-lived strings into the
 // old generation at a steady rate — which is what drives major-GC pauses on
-// long sessions. A value is only cached on its second sighting, tracked by
-// a numeric hash so first sightings allocate nothing. A hash collision just
-// admits a value one sighting early, which is harmless.
+// long sessions. A value is only cached on its second sighting. Sightings
+// are tracked as 32-bit hashes in a Set<number> (8 bytes per entry, no
+// allocation per lookup) rather than a Set<string>: the CPU cost is a wash
+// — Set<string> hashes internally too — but a Set<string> would RETAIN
+// every once-seen value, multi-KB CJK paragraphs included, recreating the
+// exact old-gen string buildup this admission control exists to prevent.
+// The hash is not load-bearing for correctness: a collision just admits a
+// value one sighting early, which is harmless.
 const STATIC_SEEN_MAX_ENTRIES = 8_192;
 const staticSeenOnce = new Set<number>();
 

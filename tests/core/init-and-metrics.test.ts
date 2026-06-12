@@ -2,13 +2,6 @@ import type { record as rrwebRecord } from "@rrweb/record";
 import { describe, expect, test, vi } from "vitest";
 import type { SessionPerfMetrics } from "@/core/session.ts";
 import { MILANA_CUSTOM_EVENT_TAG } from "../../src/core/session.ts";
-// Masked values are asserted via staticMaskText. With
-// shouldUseLayoutPreservingMasking off (the default in these tests), every
-// non-whitespace character is masked as "*" — identical to the static
-// fallback's output for these hyphen-free values, so the assertions hold for
-// either masker. The shouldUseLayoutPreservingMasking tests below pin where
-// the two maskers diverge (hyphens). These tests cover mask-vs-reveal
-// routing; the mask algorithm itself is covered in text-mask.test.ts.
 import { staticMaskText } from "../../src/core/text-mask.ts";
 import { setItemMock } from "../setup";
 import {
