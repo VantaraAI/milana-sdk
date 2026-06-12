@@ -96,5 +96,10 @@
 	},
 	"lint-staged": {
 		"*.{ts,tsx,js,mjs,cjs,json,jsonc}": "biome check --write --no-errors-on-unmatched"
+	},
+	"pnpm": {
+		"overrides": {
+			"esbuild": "0.28.1"
+		}
 	}
 }
