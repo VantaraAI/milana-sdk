@@ -1852,11 +1852,12 @@ export class MilanaSession implements IMilanaSessionSingleton {
 	}
 
 	private maskInputValue(value: string, element: HTMLElement): string {
-		if (this.shouldMaskInputValue(element)) {
+		const type = this.getInputType(element as HTMLInputElement);
+		if (this.shouldMaskInputValue(element, type)) {
 			// Passwords are masked as plain asterisks: the field renders
 			// bullets regardless of content, so layout-preserving
 			// placeholders buy nothing here.
-			if (this.getInputType(element as HTMLInputElement) === "password") {
+			if (type === "password") {
 				return MASK_PLACEHOLDER.repeat(value.length);
 			}
 			return maskTextValue(value, element);
@@ -1865,8 +1866,10 @@ export class MilanaSession implements IMilanaSessionSingleton {
 		return value;
 	}
 
-	private shouldMaskInputValue(element: HTMLElement): boolean {
-		const type = this.getInputType(element as HTMLInputElement);
+	private shouldMaskInputValue(
+		element: HTMLElement,
+		type: string | null,
+	): boolean {
 		// Sensitive input types are always masked, before any unmask check below.
 		// password/tel/email are built in; maskInputTypes can add more. None of
 		// these can be revealed by unmaskSelector.

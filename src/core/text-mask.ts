@@ -46,7 +46,6 @@ const ARABIC_RE = /\p{scx=Arabic}/u;
 const EMOJI_RE = /\p{Extended_Pictographic}/u;
 const LATIN_LETTER_RE = /^[A-Za-z]$/;
 const DIGIT_RE = /^[0-9]$/;
-const WHITESPACE_ONLY_RE = /^\s+$/;
 // Separator classification for the tokenizer's scan loop: whitespace and
 // hyphens are kept verbatim by both layers because they carry the
 // line-break opportunities the layout depends on (browsers break after
@@ -77,13 +76,27 @@ export function isSeparatorCode(code: number): boolean {
 	);
 }
 
-function hasSeparator(value: string): boolean {
+// Index of the first separator in `value`, or -1. Lets maskTextValue take a
+// zero-slice fast path for single-token values and start its scan loop past
+// the part it has already classified.
+function firstSeparatorIndex(value: string): number {
 	for (let i = 0; i < value.length; i++) {
 		if (isSeparatorCode(value.charCodeAt(i))) {
-			return true;
+			return i;
 		}
 	}
-	return false;
+	return -1;
+}
+
+// A grapheme is preserved verbatim when every code unit is a separator —
+// the same set the tokenizer uses, so the two layers cannot diverge.
+function isPreservedSeparator(grapheme: string): boolean {
+	for (let i = 0; i < grapheme.length; i++) {
+		if (!isSeparatorCode(grapheme.charCodeAt(i))) {
+			return false;
+		}
+	}
+	return true;
 }
 
 // Static-layer width classes for Latin letters, derived from averaged canvas
@@ -113,10 +126,9 @@ const graphemeSegmenter: Intl.Segmenter | null =
 // Graphemes only differ from code points when clustering characters are
 // involved: combining marks (which include variation selectors), ZWJ,
 // regional-indicator pairs, emoji skin-tone modifiers, conjoining Hangul
-// jamo. Checked once per
-// value so the common case can iterate by code point — the segmenter
-// allocates a segment object per grapheme, which is a dominant garbage
-// source when masking unique CJK/Latin text at text-churn rates.
+// jamo. Checked once per value so the common case can iterate by code
+// point — the segmenter allocates a segment object per grapheme, which is a
+// dominant garbage source when masking unique CJK/Latin text at churn rates.
 const NEEDS_GRAPHEME_SEGMENTATION_RE =
 	/\u200D|[\p{M}\u1100-\u11FF\uA960-\uA97F\uD7B0-\uD7FF]|[\u{1F1E6}-\u{1F1FF}]|[\u{1F3FB}-\u{1F3FF}]/u;
 
@@ -149,9 +161,9 @@ function fnv1a(value: string): number {
 }
 
 function maskGrapheme(grapheme: string): string {
-	if (WHITESPACE_ONLY_RE.test(grapheme)) {
-		// Whitespace is kept verbatim: it carries the line-break
-		// opportunities the layout depends on and is not sensitive.
+	if (isPreservedSeparator(grapheme)) {
+		// Whitespace/hyphens are kept verbatim (see isSeparatorCode) — this
+		// covers multi-unit whitespace graphemes like "\r\n" too.
 		return grapheme;
 	}
 	if (CJK_RE.test(grapheme) || EMOJI_RE.test(grapheme)) {
@@ -169,11 +181,6 @@ function maskGrapheme(grapheme: string): string {
 		// phone-like patterns) is part of the accepted leak surface and
 		// useful to downstream analysis.
 		return "0";
-	}
-	if (grapheme === "-") {
-		// Hyphens are preserved: they carry break opportunities (see
-		// isSeparatorCode).
-		return "-";
 	}
 	// Punctuation, combining-mark graphemes, and any script without
 	// dedicated handling (Greek, Cyrillic, Thai, ...).
@@ -402,20 +409,20 @@ function applyTextTransform(text: string, transform: string): string {
 	}
 }
 
+// Candidates are built only from BASES, which are case-invariant, so no
+// text-transform is applied here — only the target word's measurement (done
+// by the caller) needs the transform.
 function buildMeasuredPlaceholder(
 	target: number,
 	ctx: CanvasRenderingContext2D,
-	bases: string[],
-	textTransform: string,
 ): string | null {
-	const measure = (text: string) =>
-		ctx.measureText(applyTextTransform(text, textTransform)).width;
+	const measure = (text: string) => ctx.measureText(text).width;
 
 	// Single-base widths are used only for ordering and count estimates;
 	// candidates are always measured as whole strings.
-	const ordered = bases
-		.map((base) => ({ base, width: measure(base) }))
-		.sort((a, b) => b.width - a.width);
+	const ordered = BASES.map((base) => ({ base, width: measure(base) })).sort(
+		(a, b) => b.width - a.width,
+	);
 	if (ordered.some((b) => b.width <= 0.05)) {
 		// Degenerate metrics (font not really applied); measuring would loop.
 		return null;
@@ -426,9 +433,10 @@ function buildMeasuredPlaceholder(
 	// that stop growing as the candidate grows, which would otherwise make
 	// the fill loop below append glyphs forever on the customer's main
 	// thread. Hitting the budget means metrics are unusable → static layer.
+	// BASES are single UTF-16 code units, so placeholder.length is the glyph
+	// count.
 	const maxGlyphs =
 		Math.ceil(target / ordered[ordered.length - 1].width) * 2 + 8;
-	let total = 0;
 
 	// Greedy fill widest-first: jump to an estimate from the single-glyph
 	// width, then correct against whole-string measurements (kerning and
@@ -445,15 +453,16 @@ function buildMeasuredPlaceholder(
 		if (room < baseWidth) {
 			continue;
 		}
-		const jump = Math.min(Math.floor(room / baseWidth), maxGlyphs - total);
+		const jump = Math.min(
+			Math.floor(room / baseWidth),
+			maxGlyphs - placeholder.length,
+		);
 		placeholder += base.repeat(jump);
 		counts[i] += jump;
-		total += jump;
 		width = measure(placeholder);
 		while (counts[i] > 0 && width > target + WIDTH_TOLERANCE) {
-			placeholder = placeholder.slice(0, placeholder.length - base.length);
+			placeholder = placeholder.slice(0, -1);
 			counts[i]--;
-			total--;
 			width = measure(placeholder);
 		}
 		let widthBeforeAppend = width;
@@ -461,15 +470,13 @@ function buildMeasuredPlaceholder(
 			widthBeforeAppend = width;
 			placeholder += base;
 			counts[i]++;
-			total++;
-			if (total > maxGlyphs) {
+			if (placeholder.length > maxGlyphs) {
 				return null;
 			}
 			width = measure(placeholder);
 		} while (width <= target + WIDTH_TOLERANCE);
-		placeholder = placeholder.slice(0, placeholder.length - base.length);
+		placeholder = placeholder.slice(0, -1);
 		counts[i]--;
-		total--;
 		width = widthBeforeAppend;
 	}
 
@@ -533,6 +540,14 @@ function maskWordMeasured(
 	spec: FontSpec,
 	words: Map<string, string>,
 ): string {
+	// Cache first: only measured-path words are ever admitted, so a hit
+	// proves the word needs none of the routing checks below — and the
+	// Unicode-property regexes are the most expensive thing on this path.
+	const cached = words.get(word);
+	if (cached !== undefined) {
+		return cached;
+	}
+
 	// CJK, emoji, and Arabic go straight to the static layer (see the regex
 	// comments above for why), as do very long tokens (see
 	// MAX_MEASURED_WORD_LENGTH).
@@ -543,11 +558,6 @@ function maskWordMeasured(
 		ARABIC_RE.test(word)
 	) {
 		return staticMaskText(word);
-	}
-
-	const cached = words.get(word);
-	if (cached !== undefined) {
-		return cached;
 	}
 
 	const ctx = getConfiguredCtx(spec);
@@ -563,12 +573,7 @@ function maskWordMeasured(
 		let byWidth = widthBucketCache.get(spec.key);
 		placeholder = byWidth?.get(bucket) ?? null;
 		if (placeholder === null) {
-			placeholder = buildMeasuredPlaceholder(
-				target,
-				ctx,
-				BASES,
-				spec.textTransform,
-			);
+			placeholder = buildMeasuredPlaceholder(target, ctx);
 			if (placeholder !== null) {
 				if (widthBucketEntries >= WIDTH_BUCKET_CACHE_MAX_ENTRIES) {
 					// Wholesale clear is fine here: entries are width-keyed, so
@@ -614,6 +619,9 @@ export function maskTextValue(
 	value: string,
 	element: HTMLElement | null,
 ): string {
+	if (value.length === 0) {
+		return value;
+	}
 	const spec = element ? resolveFontSpec(element) : null;
 	if (!spec) {
 		return staticMaskText(value);
@@ -626,16 +634,17 @@ export function maskTextValue(
 	// allocate several arrays per call, which is a measurable share of GC
 	// pressure at text-churn rates.
 	const length = value.length;
-	if (length === 0) {
-		return value;
-	}
 	const words = wordCacheFor(spec.key);
+	const firstSeparator = firstSeparatorIndex(value);
 	// Single-token fast path (labels, table cells): no slicing at all.
-	if (!hasSeparator(value)) {
+	if (firstSeparator === -1) {
 		return maskWordMeasured(value, spec, words);
 	}
-	let result = "";
-	let index = 0;
+	let result =
+		firstSeparator > 0
+			? maskWordMeasured(value.slice(0, firstSeparator), spec, words)
+			: "";
+	let index = firstSeparator;
 	while (index < length) {
 		const start = index;
 		if (isSeparatorCode(value.charCodeAt(index))) {

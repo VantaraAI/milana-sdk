@@ -27,12 +27,6 @@
  * - Browsers without canvas letterSpacing support measure letter-spaced text
  *   slightly narrow/wide; the placeholder inherits the element's real
  *   letter-spacing at render so widths drift by the spacing delta.
- * - Arabic (and other shaped/cursive scripts) is not width-matched: correct
- *   measurement would need in-script basis letters, which we dropped for
- *   simplicity. Arabic words mask to "*" per grapheme — old-masker-level
- *   width drift, but no CJK-style collapse since Arabic has word spaces.
- * - Korean is approximated, not measured: each Hangul syllable becomes a
- *   fullwidth ＊ (~1em vs ~1em — close, not exact).
  * - RTL/bidi: the • * # symbols are direction-neutral, so a Latin word
  *   embedded in an RTL (Hebrew/Arabic) paragraph loses its LTR-ness and the
  *   line's bidi run ordering can shift — horizontal click positions inside
@@ -46,7 +40,7 @@
  *   (~2px at 16px font) of the target when no exact basis combination
  *   exists. Razor-edge wrap deltas only; non-accumulating across words.
  */
-import { describe, expect, test } from "vitest";
+import { beforeEach, describe, expect, test } from "vitest";
 import {
 	maskTextValue,
 	resetTextMaskStateForTesting,
@@ -56,8 +50,9 @@ import {
 const FW = "＊";
 
 describe("known limitations (pinned behavior)", () => {
+	beforeEach(resetTextMaskStateForTesting);
+
 	test("Thai (and other spaceless SEA scripts) produce one unbreakable placeholder run", () => {
-		resetTextMaskStateForTesting();
 		// Thai has no inter-word spaces; browsers wrap it at dictionary-derived
 		// boundaries. The masked output is an unbroken run with no break
 		// opportunities, so a long Thai paragraph collapses toward one
@@ -70,7 +65,6 @@ describe("known limitations (pinned behavior)", () => {
 	});
 
 	test("zero-width space (U+200B) break hints are masked away, not preserved", () => {
-		resetTextMaskStateForTesting();
 		// U+200B is not \s, so it is treated as content and masked to "*",
 		// destroying the explicit break opportunity it provided. Common in
 		// Thai content pipelines and long-technical-string typography.
@@ -80,7 +74,6 @@ describe("known limitations (pinned behavior)", () => {
 	});
 
 	test("Korean is approximated, not measured: one ＊ per Hangul syllable", () => {
-		resetTextMaskStateForTesting();
 		// Hangul syllables are ~1em wide, so the fullwidth asterisk is a
 		// close width match — but it is not measured against the page's
 		// actual font, so it is approximate, not exact.
@@ -88,7 +81,6 @@ describe("known limitations (pinned behavior)", () => {
 	});
 
 	test("Arabic is not width-matched: * per grapheme", () => {
-		resetTextMaskStateForTesting();
 		// Arabic is shaped/cursive, so width-matching it would need in-script
 		// basis letters — dropped to keep the masker simple. Width drift is
 		// gradual rather than catastrophic because Arabic has word spaces.
@@ -96,7 +88,6 @@ describe("known limitations (pinned behavior)", () => {
 	});
 
 	test("soft hyphens (U+00AD) lose their break opportunity", () => {
-		resetTextMaskStateForTesting();
 		// U+00AD is invisible until the browser breaks there; masking it to a
 		// visible base glyph both widens the word slightly and removes the
 		// hyphenation point. Same class as the accepted hyphens:auto edge.
@@ -105,7 +96,6 @@ describe("known limitations (pinned behavior)", () => {
 	});
 
 	test("text glyphs matching Extended_Pictographic (©, ™, ®) inflate to fullwidth", () => {
-		resetTextMaskStateForTesting();
 		// These render as narrow text glyphs but match the emoji property, so
 		// they become a ~1em fullwidth asterisk: slight width inflation, and
 		// any word containing them routes to the static layer.
@@ -113,7 +103,6 @@ describe("known limitations (pinned behavior)", () => {
 	});
 
 	test("keycap emoji are not Extended_Pictographic and mask narrow", () => {
-		resetTextMaskStateForTesting();
 		// "1️⃣" (digit + VS16 + combining keycap) renders emoji-wide but its
 		// grapheme doesn't match the emoji property and isn't a single mapped
 		// char, so it falls through to a medium-width "*": width undershoot.
@@ -121,7 +110,6 @@ describe("known limitations (pinned behavior)", () => {
 	});
 
 	test("tokens narrower than the narrowest basis glyph overshoot", () => {
-		resetTextMaskStateForTesting();
 		// Lone thin punctuation (".", ",", "|") must produce a non-empty mask,
 		// so it gets one narrowest basis glyph even when that is wider than
 		// the original: per-token overshoot of a few px.
@@ -130,7 +118,6 @@ describe("known limitations (pinned behavior)", () => {
 	});
 
 	test("whitespace is preserved verbatim, including exotic whitespace", () => {
-		resetTextMaskStateForTesting();
 		// All \s whitespace (NBSP, ideographic space U+3000, line/para
 		// separators) passes through unmasked. This preserves word-length
 		// patterns — part of the accepted leak surface, and identical to the
@@ -139,7 +126,6 @@ describe("known limitations (pinned behavior)", () => {
 	});
 
 	test("scripts without dedicated handling mask to uniform-width *", () => {
-		resetTextMaskStateForTesting();
 		// Greek, Cyrillic, Hebrew, Devanagari, Thai, etc. have no width-class
 		// mapping — every grapheme becomes "*" in the static layer, losing
 		// per-char width fidelity. The measured layer still width-matches
