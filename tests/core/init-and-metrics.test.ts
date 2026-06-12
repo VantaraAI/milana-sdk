@@ -2,6 +2,7 @@ import type { record as rrwebRecord } from "@rrweb/record";
 import { describe, expect, test, vi } from "vitest";
 import type { SessionPerfMetrics } from "@/core/session.ts";
 import { MILANA_CUSTOM_EVENT_TAG } from "../../src/core/session.ts";
+import { staticMaskText } from "../../src/core/text-mask.ts";
 import { setItemMock } from "../setup";
 import {
 	clientKey,
@@ -162,7 +163,7 @@ describe("Core Library - Init and Metrics", () => {
 					emailInput.type = "email";
 					const email = "jane@example.com";
 					expect(rrwebOptions.maskInputFn?.(email, emailInput)).toBe(
-						"*".repeat(email.length),
+						staticMaskText(email),
 					);
 
 					// Text and inputs nested below a maskTextClass/maskInputClass
@@ -171,15 +172,64 @@ describe("Core Library - Init and Metrics", () => {
 					const maskedText = document.createElement("span");
 					nestUnder("milana-mask", maskedText);
 					expect(rrwebOptions.maskTextFn?.("Secret", maskedText)).toBe(
-						"******",
+						staticMaskText("Secret"),
 					);
 
 					const nestedInput = document.createElement("input");
 					nestedInput.type = "text";
 					nestUnder("milana-mask", nestedInput);
 					expect(rrwebOptions.maskInputFn?.("customer data", nestedInput)).toBe(
-						"*************",
+						staticMaskText("customer data"),
 					);
+				});
+
+				test("masks every non-whitespace character as * by default", async () => {
+					const { init } = await importMilana();
+					const { record } = await import("@rrweb/record");
+					mockSampledSession("default-masker-session");
+
+					await init(productId, clientKey, {
+						environment: "test",
+						version: "1.0",
+						metadata: {},
+					});
+
+					const rrwebOptions = getRrwebOptions(record);
+					const maskedText = document.createElement("span");
+					nestUnder("milana-mask", maskedText);
+					// Hyphens distinguish the maskers: the default masker turns
+					// them into "*", the layout-preserving masker keeps them as
+					// break opportunities.
+					expect(rrwebOptions.maskTextFn?.("call 555-1234", maskedText)).toBe(
+						"**** ********",
+					);
+				});
+
+				test("masks with the layout-preserving masker when shouldUseLayoutPreservingMasking is set", async () => {
+					const { init } = await importMilana();
+					const { record } = await import("@rrweb/record");
+					mockSampledSession("layout-preserving-masker-session");
+
+					await init(
+						productId,
+						clientKey,
+						{
+							environment: "test",
+							version: "1.0",
+							metadata: {},
+						},
+						{ privacy: { shouldUseLayoutPreservingMasking: true } },
+					);
+
+					const rrwebOptions = getRrwebOptions(record);
+					const maskedText = document.createElement("span");
+					nestUnder("milana-mask", maskedText);
+					// jsdom has no canvas 2d context, so this exercises the
+					// layout-preserving masker's static fallback (hyphens kept).
+					expect(rrwebOptions.maskTextFn?.("call 555-1234", maskedText)).toBe(
+						staticMaskText("call 555-1234"),
+					);
+					expect(staticMaskText("call 555-1234")).toBe("**** ***-****");
 				});
 
 				test("high masks all inputs without globally masking text", async () => {
@@ -204,7 +254,7 @@ describe("Core Library - Init and Metrics", () => {
 					const input = document.createElement("input");
 					input.type = "text";
 					expect(rrwebOptions.maskInputFn?.("customer data", input)).toBe(
-						"*************",
+						staticMaskText("customer data"),
 					);
 				});
 
@@ -229,13 +279,13 @@ describe("Core Library - Init and Metrics", () => {
 
 					const textElement = document.createElement("p");
 					expect(rrwebOptions.maskTextFn?.("Secret text", textElement)).toBe(
-						"****** ****",
+						staticMaskText("Secret text"),
 					);
 
 					const input = document.createElement("input");
 					input.type = "text";
 					expect(rrwebOptions.maskInputFn?.("customer data", input)).toBe(
-						"*************",
+						staticMaskText("customer data"),
 					);
 				});
 
@@ -263,14 +313,14 @@ describe("Core Library - Init and Metrics", () => {
 					const textElement = document.createElement("span");
 					nestUnder("sensitive", textElement);
 					expect(rrwebOptions.maskTextFn?.("Secret", textElement)).toBe(
-						"******",
+						staticMaskText("Secret"),
 					);
 
 					const input = document.createElement("input");
 					input.type = "text";
 					nestUnder("sensitive", input);
 					expect(rrwebOptions.maskInputFn?.("customer data", input)).toBe(
-						"*************",
+						staticMaskText("customer data"),
 					);
 				});
 
@@ -386,7 +436,7 @@ describe("Core Library - Init and Metrics", () => {
 					const maskedSubtree = nestUnder("sensitive", textElement);
 					nestUnder("public", maskedSubtree);
 					expect(rrwebOptions.maskTextFn?.("Secret", textElement)).toBe(
-						"******",
+						staticMaskText("Secret"),
 					);
 
 					const input = document.createElement("input");
@@ -394,7 +444,7 @@ describe("Core Library - Init and Metrics", () => {
 					const maskedInputSubtree = nestUnder("sensitive", input);
 					nestUnder("public", maskedInputSubtree);
 					expect(rrwebOptions.maskInputFn?.("customer data", input)).toBe(
-						"*************",
+						staticMaskText("customer data"),
 					);
 				});
 
@@ -423,6 +473,8 @@ describe("Core Library - Init and Metrics", () => {
 					const input = document.createElement("input");
 					input.type = "password";
 					input.className = "public";
+					// Passwords get a length-preserving mask (one * per char), not
+					// the layout-preserving one: the field renders bullets per char.
 					expect(rrwebOptions.maskInputFn?.("customer data", input)).toBe(
 						"*************",
 					);
@@ -453,7 +505,7 @@ describe("Core Library - Init and Metrics", () => {
 					email.className = "public";
 					const emailValue = "jane@example.com";
 					expect(rrwebOptions.maskInputFn?.(emailValue, email)).toBe(
-						"*".repeat(emailValue.length),
+						staticMaskText(emailValue),
 					);
 
 					const tel = document.createElement("input");
@@ -601,7 +653,7 @@ describe("Core Library - Init and Metrics", () => {
 					const maskedInputSubtree = nestUnder("sensitive", input);
 					nestUnder("milana-unmask", maskedInputSubtree);
 					expect(rrwebOptions.maskInputFn?.("customer data", input)).toBe(
-						"*************",
+						staticMaskText("customer data"),
 					);
 				});
 
@@ -671,7 +723,7 @@ describe("Core Library - Init and Metrics", () => {
 					url.className = "public";
 					const urlValue = "https://example.com";
 					expect(rrwebOptions.maskInputFn?.(urlValue, url)).toBe(
-						"*".repeat(urlValue.length),
+						staticMaskText(urlValue),
 					);
 
 					// A type not listed remains unmasked in normal mode.

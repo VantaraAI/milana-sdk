@@ -16,6 +16,7 @@ import {
 	saveSessionState,
 	setSessionId,
 } from "./session-store";
+import { maskTextValue } from "./text-mask";
 import type {
 	CallerType,
 	IMilanaSessionSingleton,
@@ -182,10 +183,6 @@ function withoutStatefulRegexFlags(matcher: string | RegExp): string | RegExp {
 	const flags = matcher.flags.replace(/[gy]/g, "");
 	const source = matcher.sticky ? `^(?:${matcher.source})` : matcher.source;
 	return new RegExp(source, flags);
-}
-
-function maskTextValue(value: string): string {
-	return value.replace(/[\S]/g, MASK_PLACEHOLDER);
 }
 
 /**
@@ -363,6 +360,8 @@ export class MilanaSession implements IMilanaSessionSingleton {
 
 		const privacyOptions: InitPrivacyOptions = {
 			maskingLevel,
+			shouldUseLayoutPreservingMasking:
+				options.privacy?.shouldUseLayoutPreservingMasking ?? false,
 			blockClass: withoutStatefulRegexFlags(
 				options.privacy?.blockClass ?? "milana-block",
 			),
@@ -1855,15 +1854,34 @@ export class MilanaSession implements IMilanaSessionSingleton {
 	}
 
 	private maskInputValue(value: string, element: HTMLElement): string {
-		if (this.shouldMaskInputValue(element)) {
-			return MASK_PLACEHOLDER.repeat(value.length);
+		const type = this.getInputType(element as HTMLInputElement);
+		if (this.shouldMaskInputValue(element, type)) {
+			// Passwords are masked as plain asterisks: the field renders
+			// bullets regardless of content, so layout-preserving
+			// placeholders buy nothing here.
+			if (type === "password") {
+				return MASK_PLACEHOLDER.repeat(value.length);
+			}
+			return this.maskValue(value, element);
 		}
 
 		return value;
 	}
 
-	private shouldMaskInputValue(element: HTMLElement): boolean {
-		const type = this.getInputType(element as HTMLInputElement);
+	// Masks a value with the configured strategy: width-matched placeholders
+	// (see text-mask.ts) behind privacy.shouldUseLayoutPreservingMasking,
+	// otherwise every non-whitespace character becomes "*".
+	private maskValue(value: string, element: HTMLElement | null): string {
+		if (this.options.privacy.shouldUseLayoutPreservingMasking) {
+			return maskTextValue(value, element);
+		}
+		return value.replace(/\S/g, MASK_PLACEHOLDER);
+	}
+
+	private shouldMaskInputValue(
+		element: HTMLElement,
+		type: string | null,
+	): boolean {
 		// Sensitive input types are always masked, before any unmask check below.
 		// password/tel/email are built in; maskInputTypes can add more. None of
 		// these can be revealed by unmaskSelector.
@@ -1891,10 +1909,10 @@ export class MilanaSession implements IMilanaSessionSingleton {
 		// not unmaskable — stays masked.
 		const reveal =
 			element !== null &&
-			!this.elementOrAncestorIsExplicitlyMaskedForText(element) &&
-			this.elementOrAncestorCanBeUnmasked(element);
+			this.elementOrAncestorCanBeUnmasked(element) &&
+			!this.elementOrAncestorIsExplicitlyMaskedForText(element);
 
-		return reveal ? value : maskTextValue(value);
+		return reveal ? value : this.maskValue(value, element);
 	}
 
 	// True for the built-in PII types plus any the customer added via
@@ -1948,6 +1966,9 @@ export class MilanaSession implements IMilanaSessionSingleton {
 	}
 
 	private elementOrAncestorCanBeUnmasked(element: HTMLElement): boolean {
+		// A subtree is revealed by either the unmask class (default
+		// "milana-unmask") or an unmaskSelector — unless it sits under a
+		// blocked ancestor, which always wins.
 		return (
 			!this.elementOrAncestorIsBlocked(element) &&
 			(this.elementOrAncestorHasClass(
