@@ -6,8 +6,9 @@
  * (recorded against the real layout) land in the wrong place.
  *
  * Two layers:
- * - Measured (main path): per word, build a placeholder from • * # whose
- *   canvas-measured width matches the original within WIDTH_TOLERANCE.
+ * - Measured (main path): per word, build a placeholder from the symbol
+ *   alphabet * # _ & @ whose width (computed from canvas-measured per-font
+ *   glyph advances) matches the original within WIDTH_TOLERANCE.
  * - Static (fallback, never throws): per-grapheme substitution — CJK and
  *   emoji → ＊, Latin letters → a width-class symbol, digits → 0, anything
  *   else → *. Used when measurement is unavailable or not worth it.
@@ -100,20 +101,52 @@ function isPreservedSeparator(grapheme: string): boolean {
 }
 
 // Static-layer width classes for Latin letters, derived from averaged canvas
-// advance widths across common fonts. Letters not in either set (the o/m
-// width classes and most capitals) map to "#". The three symbols span
-// ~0.35em (•) / ~0.45em (*) / ~0.6em (#); wide letters like m/w/M land on
-// "#" with some undershoot — acceptable for a fallback layer whose goal is
-// staying within a line, not exactness.
-const NARROW_LETTERS = new Set("fijlrtI");
-const MEDIUM_LETTERS = new Set("aceksvxyzJL");
+// advance widths across common fonts (probed in real Chrome: i/l ≈ 0.26em,
+// f/t ≈ 0.31em, s/x ≈ 0.47–0.52em, o/n ≈ 0.56em, m ≈ 0.86em). Letters not in
+// any class (most capitals, ~0.6–0.7em) map to "#". Approximate by design —
+// the fallback layer's goal is staying within a line, not exactness.
+const LETTER_WIDTH_CLASSES: ReadonlyArray<readonly [string, string]> = [
+	["iljftrIaceksvxyzJ", "*"],
+	["onuhbdgpqL", "_"],
+	["mwMW", "@"],
+];
+const LETTER_TO_BASE = new Map<string, string>();
+for (const [letters, base] of LETTER_WIDTH_CLASSES) {
+	for (const letter of letters) {
+		LETTER_TO_BASE.set(letter, base);
+	}
+}
 
-// Basis alphabet for measured placeholder construction: • * # — chosen
-// because they are present in effectively every font (ASCII + WGL4), carry
-// the letter line-break class (a run of them wraps exactly like a word,
-// adding no break opportunities), span narrow-to-wide advances for width
-// composition, and read as obviously masked.
-const BASES = ["•", "*", "#"];
+// Basis alphabet for measured placeholder construction: * # _ & @ —
+// chosen on three hard constraints, in priority order:
+//
+// 1. Printable ASCII: present in every text font including aggressively
+//    subset webfonts, so placeholders never mix in fallback-font glyphs
+//    (which would perturb line height and diverge between the recording and
+//    replay machines).
+// 2. UAX#14 line-break class AL — the *formal* letter class, not just
+//    empirically letter-like in Chrome. Placeholders must wrap exactly like
+//    the words they replace in every engine and every word-break mode:
+//    grawlix-style candidates (' ! $ %) and | passed normal-wrap probes in
+//    Chrome but are formally quote/exclamation/prefix/postfix/break-after
+//    class, and under word-break:break-all their runs stay unbreakable
+//    while real words gain per-glyph break points — measured as multi-line
+//    height drift by .context/browser-validation/wrap-modes-probe.mjs.
+//    (ascii-probe.mjs also disqualified "?", which allows breaks against
+//    adjacent letters even in normal mode.)
+// 3. Advance spread for width composition: ~0.35em (*) to ~0.93em (@), all
+//    case-invariant under text-transform, all reading as obviously masked
+//    even in homogeneous runs ("****", "@@@@"). The backtick — the only
+//    other AL-class ASCII symbol, and the only sub-* candidate — was
+//    rejected here: its advance varies wildly across fonts (0.22em in
+//    Arial, ~0.48em in Georgia) and long words fitted mostly from
+//    backticks read as rendering corruption rather than masking.
+//
+// Listed in PREFERENCE order, not width order: baseAdvancesFor drops bases
+// whose advance nearly duplicates an earlier-listed one (they add no
+// fitting power, and the fitter would flood words with whichever duplicate
+// fine-tunes best).
+const BASES = ["*", "#", "_", "&", "@"];
 
 // Intl.Segmenter is unavailable in some older browsers; Array.from (per code
 // point) is the fallback. Code points still keep surrogate pairs (emoji)
@@ -170,11 +203,7 @@ function maskGrapheme(grapheme: string): string {
 		return FULLWIDTH_ASTERISK;
 	}
 	if (LATIN_LETTER_RE.test(grapheme)) {
-		return NARROW_LETTERS.has(grapheme)
-			? "\u2022"
-			: MEDIUM_LETTERS.has(grapheme)
-				? "*"
-				: "#";
+		return LETTER_TO_BASE.get(grapheme) ?? "#";
 	}
 	if (DIGIT_RE.test(grapheme)) {
 		// Digits keep their position as "0": numeric shape (prices,
@@ -313,7 +342,9 @@ function baseAdvancesFor(
 	if (baseAdvanceCache.size >= PLACEHOLDER_CACHE_MAX_FONTS) {
 		baseAdvanceCache.clear();
 	}
-	const advances = BASES.map((base) => {
+	let degenerate = false;
+	const kept: BaseAdvance[] = [];
+	for (const base of BASES) {
 		const single = ctx.measureText(base).width;
 		const advance =
 			ctx.measureText(base.repeat(ADVANCE_REF_RUN)).width / ADVANCE_REF_RUN;
@@ -323,12 +354,18 @@ function baseAdvancesFor(
 		// means sublinear metrics — clamped/saturating measureText from
 		// canvas-fingerprinting extensions or broken polyfills — and any
 		// width computed from them would be garbage.
-		const sublinear = advance < single * 0.5;
-		return { base, advance, sublinear };
-	}).sort((a, b) => b.advance - a.advance);
-	const result = advances.some((a) => a.advance <= 0.05 || a.sublinear)
-		? null
-		: advances.map(({ base, advance }) => ({ base, advance }));
+		if (advance <= 0.05 || advance < single * 0.5) {
+			degenerate = true;
+			break;
+		}
+		// Drop near-duplicate rungs (within 5% of an earlier, more-preferred
+		// base): they add no fitting power, and the fitter would otherwise
+		// flood words with whichever duplicate fine-tunes best.
+		if (!kept.some((k) => Math.abs(k.advance - advance) < advance * 0.05)) {
+			kept.push({ base, advance });
+		}
+	}
+	const result = degenerate ? null : kept.sort((a, b) => b.advance - a.advance);
 	baseAdvanceCache.set(spec.key, result);
 	return result;
 }
@@ -473,26 +510,6 @@ function buildMeasuredPlaceholder(
 	// static layer, instead of allocating a giant string.
 	const maxGlyphs = MAX_MEASURED_WORD_LENGTH * 2;
 
-	// Greedy fill widest-first up to target + tolerance.
-	const counts: number[] = advances.map(() => 0);
-	let width = 0;
-	let totalGlyphs = 0;
-	for (let i = 0; i < advances.length; i++) {
-		const n = Math.floor(
-			(target + WIDTH_TOLERANCE - width) / advances[i].advance,
-		);
-		if (n <= 0) {
-			continue;
-		}
-		counts[i] = n;
-		width += n * advances[i].advance;
-		totalGlyphs += n;
-	}
-	if (totalGlyphs > maxGlyphs) {
-		return null;
-	}
-
-	// Hill-climb single ±1 tweaks toward the smallest absolute width error.
 	const widthOf = (c: number[]) => {
 		let w = 0;
 		for (let i = 0; i < c.length; i++) {
@@ -500,32 +517,75 @@ function buildMeasuredPlaceholder(
 		}
 		return w;
 	};
-	let best = counts;
-	let bestError = Math.abs(width - target);
+
+	// Multi-start greedy: a single widest-first fill can trap the hill climb
+	// in a local optimum (grabbing one extra-wide glyph when two medium
+	// glyphs would fit exactly), so the fill is retried with each rung as the
+	// widest allowed base and the best result wins. Construction is pure
+	// arithmetic, so the extra starts cost nothing measurable; most targets
+	// hit the tolerance on the first start and exit early.
+	let best: number[] | null = null;
+	let bestError = Number.POSITIVE_INFINITY;
 	for (
-		let iteration = 0;
-		iteration < HILL_CLIMB_MAX_ITERATIONS && bestError > WIDTH_TOLERANCE;
-		iteration++
+		let start = 0;
+		start < advances.length && bestError > WIDTH_TOLERANCE;
+		start++
 	) {
-		let improved = false;
-		for (let i = 0; i < advances.length; i++) {
-			for (const delta of [1, -1]) {
-				const candidate = best.slice();
-				candidate[i] += delta;
-				if (candidate[i] < 0) {
-					continue;
-				}
-				const error = Math.abs(widthOf(candidate) - target);
-				if (error < bestError) {
-					best = candidate;
-					bestError = error;
-					improved = true;
+		// Greedy fill widest-first (from this start) up to target + tolerance.
+		const counts: number[] = advances.map(() => 0);
+		let width = 0;
+		let totalGlyphs = 0;
+		for (let i = start; i < advances.length; i++) {
+			const n = Math.floor(
+				(target + WIDTH_TOLERANCE - width) / advances[i].advance,
+			);
+			if (n <= 0) {
+				continue;
+			}
+			counts[i] = n;
+			width += n * advances[i].advance;
+			totalGlyphs += n;
+		}
+		if (totalGlyphs > maxGlyphs) {
+			continue;
+		}
+
+		// Hill-climb single ±1 tweaks toward the smallest absolute width error.
+		let current = counts;
+		let currentError = Math.abs(width - target);
+		for (
+			let iteration = 0;
+			iteration < HILL_CLIMB_MAX_ITERATIONS && currentError > WIDTH_TOLERANCE;
+			iteration++
+		) {
+			let improved = false;
+			for (let i = 0; i < advances.length; i++) {
+				for (const delta of [1, -1]) {
+					const candidate = current.slice();
+					candidate[i] += delta;
+					if (candidate[i] < 0) {
+						continue;
+					}
+					const error = Math.abs(widthOf(candidate) - target);
+					if (error < currentError) {
+						current = candidate;
+						currentError = error;
+						improved = true;
+					}
 				}
 			}
+			if (!improved) {
+				break;
+			}
 		}
-		if (!improved) {
-			break;
+		if (currentError < bestError) {
+			best = current;
+			bestError = currentError;
 		}
+	}
+	if (best === null) {
+		// Every start exceeded the glyph cap → metrics are bogus.
+		return null;
 	}
 
 	if (!best.some((count) => count > 0)) {

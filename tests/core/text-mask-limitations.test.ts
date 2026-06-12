@@ -27,7 +27,7 @@
  * - Browsers without canvas letterSpacing support measure letter-spaced text
  *   slightly narrow/wide; the placeholder inherits the element's real
  *   letter-spacing at render so widths drift by the spacing delta.
- * - RTL/bidi: the • * # symbols are direction-neutral, so a Latin word
+ * - RTL/bidi: the masking symbols are direction-neutral, so a Latin word
  *   embedded in an RTL (Hebrew/Arabic) paragraph loses its LTR-ness and the
  *   line's bidi run ordering can shift — horizontal click positions inside
  *   such lines may drift.
@@ -70,7 +70,7 @@ describe("known limitations (pinned behavior)", () => {
 		// Thai content pipelines and long-technical-string typography.
 		const masked = maskTextValue("ab​cd", null);
 		expect(masked).not.toContain("​");
-		expect(masked).toBe("*#**#");
+		expect(masked).toBe("*_**_");
 	});
 
 	test("Korean is approximated, not measured: one ＊ per Hangul syllable", () => {
@@ -99,7 +99,7 @@ describe("known limitations (pinned behavior)", () => {
 		// These render as narrow text glyphs but match the emoji property, so
 		// they become a ~1em fullwidth asterisk: slight width inflation, and
 		// any word containing them routes to the static layer.
-		expect(staticMaskText("Acme©")).toBe(`#*#*${FW}`);
+		expect(staticMaskText("Acme©")).toBe(`#*@*${FW}`);
 	});
 
 	test("keycap emoji are not Extended_Pictographic and mask narrow", () => {
@@ -122,7 +122,7 @@ describe("known limitations (pinned behavior)", () => {
 		// separators) passes through unmasked. This preserves word-length
 		// patterns — part of the accepted leak surface, and identical to the
 		// old "*"-masker's behavior.
-		expect(staticMaskText("a b　c")).toBe("* #　*");
+		expect(staticMaskText("a b　c")).toBe("* _　*");
 	});
 
 	test("scripts without dedicated handling mask to uniform-width *", () => {

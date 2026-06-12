@@ -10,12 +10,14 @@ const FW = "＊"; // U+FF0A FULLWIDTH ASTERISK
 
 // Additive per-char width model for the fake canvas. Real fonts have kerning
 // and shaping, but an additive model is enough to verify the greedy +
-// hill-climb construction converges on the measured target. The • * # basis
-// widths mirror a narrow/medium/wide spread.
+// hill-climb construction converges on the measured target. The * _ # & @
+// basis widths mirror the narrow-to-extra-wide spread.
 const CHAR_WIDTHS: Record<string, number> = {
-	"•": 4,
 	"*": 7,
+	_: 9,
 	"#": 12,
+	"&": 14,
+	"@": 16,
 	i: 4,
 	l: 3,
 	t: 5,
@@ -25,7 +27,7 @@ const CHAR_WIDTHS: Record<string, number> = {
 	h: 8,
 	m: 12,
 	w: 11,
-	".": 3,
+	".": 2,
 };
 const DEFAULT_CHAR_WIDTH = 8;
 
@@ -72,18 +74,18 @@ afterEach(() => {
 
 describe("staticMaskText (layer 1)", () => {
 	test("maps Latin letters to width-class symbols", () => {
-		// S→# (capital), e→*, c→*, r→•, e→*, t→•
-		expect(staticMaskText("Secret")).toBe("#**•*•");
-		// w→# (wide), i/l→• (narrow)
-		expect(staticMaskText("will")).toBe("#•••");
+		// S→# (capital); the lowercase letters are all in the "*" class
+		expect(staticMaskText("Secret")).toBe("#*****");
+		// w→@ (extra-wide), i/l→* (narrow)
+		expect(staticMaskText("will")).toBe("@***");
 	});
 
 	test("preserves all whitespace verbatim", () => {
-		expect(staticMaskText("a b\tc\nd  e")).toBe("* #\t*\n#  *");
+		expect(staticMaskText("a b\tc\nd  e")).toBe("* _\t*\n_  *");
 	});
 
 	test("maps digits to 0 and preserves hyphens", () => {
-		expect(staticMaskText("call 555-1234")).toBe("**•• 000-0000");
+		expect(staticMaskText("call 555-1234")).toBe("**** 000-0000");
 	});
 
 	test("maps CJK graphemes to fullwidth asterisks", () => {
@@ -106,7 +108,7 @@ describe("staticMaskText (layer 1)", () => {
 
 	test("maps a multi-code-point emoji grapheme to a single fullwidth asterisk", () => {
 		expect(staticMaskText("👨‍👩‍👧‍👦")).toBe(FW);
-		expect(staticMaskText("hi 🎉🎉")).toBe(`#• ${FW}${FW}`);
+		expect(staticMaskText("hi 🎉🎉")).toBe(`_* ${FW}${FW}`);
 	});
 
 	test("does not split surrogate pairs", () => {
@@ -168,16 +170,16 @@ describe("maskTextValue (layer 2, measured)", () => {
 		const masked = maskTextValue("hello world", elementWithFont());
 
 		const [maskedHello, maskedWorld] = masked.split(" ");
-		// Placeholders are built only from the • * # basis glyphs.
-		expect(maskedHello).toMatch(/^[•*#]+$/);
-		expect(maskedWorld).toMatch(/^[•*#]+$/);
+		// Placeholders are built only from the grawlix basis glyphs.
+		expect(maskedHello).toMatch(/^[*_#&@]+$/);
+		expect(maskedWorld).toMatch(/^[*_#&@]+$/);
 		// Within one narrowest-base width of the target (the hill climb is
 		// local, so sub-tolerance exactness isn't guaranteed for every sum).
 		expect(Math.abs(fakeWidth(maskedHello) - fakeWidth("hello"))).toBeLessThan(
-			CHAR_WIDTHS["•"],
+			CHAR_WIDTHS["*"],
 		);
 		expect(Math.abs(fakeWidth(maskedWorld) - fakeWidth("world"))).toBeLessThan(
-			CHAR_WIDTHS["•"],
+			CHAR_WIDTHS["*"],
 		);
 	});
 
@@ -191,15 +193,15 @@ describe("maskTextValue (layer 2, measured)", () => {
 	test("preserves whitespace structure between words", () => {
 		installFakeCanvas();
 		const masked = maskTextValue("one  two\nthree", elementWithFont());
-		expect(masked).toMatch(/^[•*#]+ {2}[•*#]+\n[•*#]+$/);
+		expect(masked).toMatch(/^[*_#&@]+ {2}[*_#&@]+\n[*_#&@]+$/);
 	});
 
 	test("never returns an empty mask for a non-empty word", () => {
 		installFakeCanvas();
-		// "." (width 3) is narrower than the narrowest base "•" (width 4).
+		// "." (width 2) is narrower than the narrowest base "*" (width 7).
 		const masked = maskTextValue(".", elementWithFont());
 		expect(masked).not.toBe("");
-		expect(masked).toMatch(/^[•*#]+$/);
+		expect(masked).toMatch(/^[*_#&@]+$/);
 	});
 
 	test("routes CJK words through the static layer", () => {
@@ -257,7 +259,7 @@ describe("maskTextValue (layer 2, measured)", () => {
 			const masked = maskTextValue("hello", el);
 			// The placeholder must match the UPPERCASED width of the word.
 			expect(Math.abs(fakeWidth(masked) - fakeWidth("HELLO"))).toBeLessThan(
-				CHAR_WIDTHS["•"],
+				CHAR_WIDTHS["*"],
 			);
 			expect(ctx.measureText).toHaveBeenCalledWith("HELLO");
 		} finally {
@@ -311,15 +313,15 @@ describe("maskTextValue (layer 2, measured)", () => {
 		// Browsers can break after hyphens; the placeholder must keep them
 		// so hyphenated tokens stay breakable in narrow columns.
 		const masked = maskTextValue("INV-2026-0512", elementWithFont());
-		expect(masked).toMatch(/^[•*#]+-[•*#]+-[•*#]+$/);
+		expect(masked).toMatch(/^[*_#&@]+-[*_#&@]+-[*_#&@]+$/);
 	});
 
 	test("masks words with attached punctuation as one placeholder", () => {
 		installFakeCanvas();
 		const masked = maskTextValue("hello,", elementWithFont());
-		expect(masked).toMatch(/^[•*#]+$/);
+		expect(masked).toMatch(/^[*_#&@]+$/);
 		expect(Math.abs(fakeWidth(masked) - fakeWidth("hello,"))).toBeLessThan(
-			CHAR_WIDTHS["•"],
+			CHAR_WIDTHS["*"],
 		);
 	});
 
