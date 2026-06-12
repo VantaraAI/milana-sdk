@@ -37,10 +37,10 @@
  *   (See applyTextTransform in text-mask.ts.)
  * - hyphens: auto — dictionary hyphenation gives the browser break points
  *   inside real words, and placeholder runs are not dictionary words, so
- *   masked text loses every hyphenation point and under-wraps (probed at up
- *   to ~5 fewer lines on a narrow hyphenated column; see
- *   .context/browser-validation/wrap-modes-probe.mjs). Same family as the
- *   soft-hyphen pin below. Rare in app UIs; common in long-form publishing.
+ *   masked text loses every hyphenation point and under-wraps (measured in
+ *   real Chrome at up to ~5 fewer lines on a narrow hyphenated column).
+ *   Same family as the soft-hyphen pin below. Rare in app UIs; common in
+ *   long-form publishing.
  * - Placeholder width is a local optimum: the multi-start greedy +
  *   hill-climb construction can settle within roughly half the narrowest
  *   basis glyph (~3px at 16px font) of the target when no exact basis
