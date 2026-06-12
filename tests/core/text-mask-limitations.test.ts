@@ -21,9 +21,6 @@
  * - Webfonts not yet loaded at snapshot time bake fallback-font metrics into
  *   placeholders (accepted: we deliberately don't block on
  *   document.fonts.ready).
- * - Browsers without Intl.Segmenter (e.g. Firefox < 125): graphemes are
- *   approximated per code point, so multi-code-point emoji (ZWJ families,
- *   flags) expand to several fullwidth asterisks instead of one.
  * - Browsers without canvas letterSpacing support measure letter-spaced text
  *   slightly narrow/wide; the placeholder inherits the element's real
  *   letter-spacing at render so widths drift by the spacing delta.
@@ -47,7 +44,7 @@
  *   combination exists. Razor-edge wrap deltas only; non-accumulating
  *   across words.
  */
-import { beforeEach, describe, expect, test } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 import {
 	maskTextValue,
 	resetTextMaskStateForTesting,
@@ -131,6 +128,28 @@ describe("known limitations (pinned behavior)", () => {
 		// patterns — part of the accepted leak surface, and identical to the
 		// old "*"-masker's behavior.
 		expect(staticMaskText("a b　c")).toBe("* *　*");
+	});
+
+	test("without Intl.Segmenter, multi-code-point emoji expand instead of staying one glyph", async () => {
+		// Browsers without Intl.Segmenter (e.g. Firefox < 125) fall back to
+		// per-code-point iteration: a ZWJ family is one rendered glyph but
+		// seven code points (four emoji + three zero-width joiners), so it
+		// masks to four fullwidth asterisks interleaved with three "*" —
+		// width overshoot on emoji, but masking still never throws or leaks.
+		const original = Intl.Segmenter;
+		vi.resetModules();
+		// biome-ignore lint/performance/noDelete: simulating a browser without the API
+		delete (Intl as { Segmenter?: unknown }).Segmenter;
+		try {
+			const fresh = await import("../../src/core/text-mask");
+			expect(fresh.staticMaskText("👨‍👩‍👧‍👦")).toBe("＊*＊*＊*＊");
+			expect(fresh.staticMaskText("Secret 👨‍👩‍👧‍👦")).toBe(
+				"****** ＊*＊*＊*＊",
+			);
+		} finally {
+			(Intl as { Segmenter?: unknown }).Segmenter = original;
+			vi.resetModules();
+		}
 	});
 
 	test("the static layer is uniform-width: every non-CJK grapheme becomes *", () => {
