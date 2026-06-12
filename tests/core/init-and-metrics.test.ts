@@ -2,10 +2,13 @@ import type { record as rrwebRecord } from "@rrweb/record";
 import { describe, expect, test, vi } from "vitest";
 import type { SessionPerfMetrics } from "@/core/session.ts";
 import { MILANA_CUSTOM_EVENT_TAG } from "../../src/core/session.ts";
-// Masked values are asserted via staticMaskText: jsdom has no canvas 2d
-// context, so the layout-preserving masker always takes its static fallback
-// here. These tests cover mask-vs-reveal routing; the mask algorithm itself
-// is covered in text-mask.test.ts.
+// Masked values are asserted via staticMaskText. With layoutPreservingMasking
+// off (the default in these tests), the legacy masker turns every
+// non-whitespace character into "*" — identical to the static fallback's
+// output for these digit-free values, so the assertions hold for either
+// masker. The layoutPreservingMasking tests below pin where the two maskers
+// diverge (digits). These tests cover mask-vs-reveal routing; the mask
+// algorithm itself is covered in text-mask.test.ts.
 import { staticMaskText } from "../../src/core/text-mask.ts";
 import { setItemMock } from "../setup";
 import {
@@ -185,6 +188,54 @@ describe("Core Library - Init and Metrics", () => {
 					expect(rrwebOptions.maskInputFn?.("customer data", nestedInput)).toBe(
 						staticMaskText("customer data"),
 					);
+				});
+
+				test("masks with the legacy asterisk masker by default", async () => {
+					const { init } = await importMilana();
+					const { record } = await import("@rrweb/record");
+					mockSampledSession("legacy-masker-session");
+
+					await init(productId, clientKey, {
+						environment: "test",
+						version: "1.0",
+						metadata: {},
+					});
+
+					const rrwebOptions = getRrwebOptions(record);
+					const maskedText = document.createElement("span");
+					nestUnder("milana-mask", maskedText);
+					// Digits distinguish the maskers: legacy turns them into "*",
+					// the layout-preserving masker into "0".
+					expect(rrwebOptions.maskTextFn?.("call 555-1234", maskedText)).toBe(
+						"**** ********",
+					);
+				});
+
+				test("masks with the layout-preserving masker when layoutPreservingMasking is set", async () => {
+					const { init } = await importMilana();
+					const { record } = await import("@rrweb/record");
+					mockSampledSession("layout-preserving-masker-session");
+
+					await init(
+						productId,
+						clientKey,
+						{
+							environment: "test",
+							version: "1.0",
+							metadata: {},
+						},
+						{ privacy: { layoutPreservingMasking: true } },
+					);
+
+					const rrwebOptions = getRrwebOptions(record);
+					const maskedText = document.createElement("span");
+					nestUnder("milana-mask", maskedText);
+					// jsdom has no canvas 2d context, so this exercises the
+					// layout-preserving masker's static fallback (digits → "0").
+					expect(rrwebOptions.maskTextFn?.("call 555-1234", maskedText)).toBe(
+						staticMaskText("call 555-1234"),
+					);
+					expect(staticMaskText("call 555-1234")).toBe("**** 000-0000");
 				});
 
 				test("high masks all inputs without globally masking text", async () => {
@@ -468,7 +519,8 @@ describe("Core Library - Init and Metrics", () => {
 					tel.className = "public";
 					const telValue = "5551234567";
 					expect(rrwebOptions.maskInputFn?.(telValue, tel)).toBe(
-						staticMaskText(telValue),
+						// Legacy masker (default): digits become "*", not "0".
+						"*".repeat(telValue.length),
 					);
 				});
 

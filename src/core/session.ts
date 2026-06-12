@@ -360,6 +360,8 @@ export class MilanaSession implements IMilanaSessionSingleton {
 
 		const privacyOptions: InitPrivacyOptions = {
 			maskingLevel,
+			layoutPreservingMasking:
+				options.privacy?.layoutPreservingMasking ?? false,
 			blockClass: withoutStatefulRegexFlags(
 				options.privacy?.blockClass ?? "milana-block",
 			),
@@ -1860,10 +1862,20 @@ export class MilanaSession implements IMilanaSessionSingleton {
 			if (type === "password") {
 				return MASK_PLACEHOLDER.repeat(value.length);
 			}
-			return maskTextValue(value, element);
+			return this.maskValue(value, element);
 		}
 
 		return value;
+	}
+
+	// Masks a value with the configured strategy: width-matched placeholders
+	// (see text-mask.ts) behind privacy.layoutPreservingMasking, otherwise the
+	// legacy masker that turns every non-whitespace character into "*".
+	private maskValue(value: string, element: HTMLElement | null): string {
+		if (this.options.privacy.layoutPreservingMasking) {
+			return maskTextValue(value, element);
+		}
+		return value.replace(/\S/g, MASK_PLACEHOLDER);
 	}
 
 	private shouldMaskInputValue(
@@ -1902,7 +1914,7 @@ export class MilanaSession implements IMilanaSessionSingleton {
 			this.elementOrAncestorCanBeUnmasked(element) &&
 			!this.elementOrAncestorIsExplicitlyMaskedForText(element);
 
-		return reveal ? value : maskTextValue(value, element);
+		return reveal ? value : this.maskValue(value, element);
 	}
 
 	// True for the built-in PII types plus any the customer added via
