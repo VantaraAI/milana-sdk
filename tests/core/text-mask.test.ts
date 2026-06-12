@@ -369,6 +369,23 @@ describe("maskTextValue (layer 2, measured)", () => {
 		expect(ctx.measureText.mock.calls.length).toBe(calls);
 	});
 
+	test("reuses placeholders across different words with the same measured width", () => {
+		// Text churn (counters, tickers) produces brand-new words every
+		// update; width-bucket reuse keeps that from re-running placeholder
+		// construction (and generating GC-triggering garbage) per update.
+		const ctx = installFakeCanvas();
+		const el = elementWithFont();
+
+		const first = maskTextValue("ox", el); // o=6 + x=7 = 13px
+		const calls = ctx.measureText.mock.calls.length;
+
+		// New word, same 13px width: one measureText for the target, no
+		// construction measurements.
+		const second = maskTextValue("xo", el);
+		expect(second).toBe(first);
+		expect(ctx.measureText.mock.calls.length).toBe(calls + 1);
+	});
+
 	test("caches placeholders per font and word", () => {
 		const ctx = installFakeCanvas();
 		const el = elementWithFont();

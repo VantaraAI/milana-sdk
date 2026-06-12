@@ -149,7 +149,14 @@ export function staticMaskText(value: string): string {
 
 // --- Layer 2: canvas measurement ---
 
-type FontSpec = { font: string; letterSpacing: string; textTransform: string };
+type FontSpec = {
+	font: string;
+	letterSpacing: string;
+	textTransform: string;
+	// `font|letterSpacing|textTransform`, precomputed once per element so the
+	// per-word cache-key concatenation stays cheap on hot paths.
+	key: string;
+};
 
 // maskTextFn runs during snapshot and on every text mutation, so per-call
 // cost must stay ~µs: computed font strings are cached per element, and
@@ -169,10 +176,26 @@ const placeholderCache = new Map<string, string>();
 // Bounds memory on pathological pages (e.g. unique prices/IDs as words).
 // Entries are short (font string + word + placeholder, ≲200 chars), so the
 // cap keeps worst-case cache memory in the single-digit MB; typical pages
-// hold a few hundred entries. Both caches live for the page lifetime — the
+// hold a few hundred entries. The caches live for the page lifetime — the
 // element font cache is a WeakMap, so its entries go away with their
 // elements.
 const PLACEHOLDER_CACHE_MAX_ENTRIES = 20_000;
+
+// Placeholders are additionally cached by quantized target width, per font
+// spec. Under text churn (counters, tickers, live logs re-rendering every
+// frame) each update is a brand-new word — a guaranteed miss in the
+// word-keyed cache — but rendered widths repeat heavily, so width-keyed
+// reuse collapses unbounded unique strings into a bounded set of
+// constructions. Without it, sustained churn rebuilds placeholders
+// constantly and the construction garbage triggers major GC pauses.
+//
+// Reusing a placeholder built for a width within the same 0.25px bucket
+// adds at most 0.25px of error on top of WIDTH_TOLERANCE — well inside the
+// validated wrap-fidelity envelope.
+const WIDTH_BUCKET_PX = 0.25;
+const WIDTH_BUCKET_CACHE_MAX_ENTRIES = 20_000;
+const widthBucketCache = new Map<string, Map<number, string>>();
+let widthBucketEntries = 0;
 
 let measureCtx: CanvasRenderingContext2D | null | undefined;
 // The font/letterSpacing last successfully applied to measureCtx, so
@@ -214,10 +237,13 @@ function resolveFontSpec(element: HTMLElement): FontSpec | null {
 						.trim();
 			}
 			if (font) {
+				const letterSpacing = style.letterSpacing || "normal";
+				const textTransform = style.textTransform || "none";
 				spec = {
 					font,
-					letterSpacing: style.letterSpacing || "normal",
-					textTransform: style.textTransform || "none",
+					letterSpacing,
+					textTransform,
+					key: `${font}|${letterSpacing}|${textTransform}`,
 				};
 			}
 		}
@@ -291,14 +317,13 @@ function applyTextTransform(text: string, transform: string): string {
 }
 
 function buildMeasuredPlaceholder(
-	word: string,
+	target: number,
 	ctx: CanvasRenderingContext2D,
 	bases: string[],
 	textTransform: string,
 ): string | null {
 	const measure = (text: string) =>
 		ctx.measureText(applyTextTransform(text, textTransform)).width;
-	const target = measure(word);
 
 	// Single-base widths are used only for ordering and count estimates;
 	// candidates are always measured as whole strings.
@@ -315,46 +340,59 @@ function buildMeasuredPlaceholder(
 	// that stop growing as the candidate grows, which would otherwise make
 	// the fill loop below append glyphs forever on the customer's main
 	// thread. Hitting the budget means metrics are unusable → static layer.
-	const maxGlyphs = word.length * 4 + 8;
+	const maxGlyphs =
+		Math.ceil(target / ordered[ordered.length - 1].width) * 2 + 8;
 	let total = 0;
-
-	const counts: number[] = ordered.map(() => 0);
-	const render = (c: number[]) =>
-		ordered.map((o, i) => o.base.repeat(c[i])).join("");
-	const widthOf = (c: number[]) => measure(render(c));
 
 	// Greedy fill widest-first: jump to an estimate from the single-glyph
 	// width, then correct against whole-string measurements (kerning and
-	// letter-spacing make the estimate inexact).
+	// letter-spacing make the estimate inexact). The candidate string is
+	// grown/shrunk incrementally rather than re-rendered per measurement —
+	// this loop runs on every placeholder construction, and per-measurement
+	// rebuild garbage is what caused major-GC pauses under text churn.
+	const counts: number[] = ordered.map(() => 0);
+	let placeholder = "";
+	let width = 0;
 	for (let i = 0; i < ordered.length; i++) {
-		const room = target - widthOf(counts);
-		if (room < ordered[i].width) {
+		const { base, width: baseWidth } = ordered[i];
+		const room = target - width;
+		if (room < baseWidth) {
 			continue;
 		}
-		const jump = Math.min(
-			Math.floor(room / ordered[i].width),
-			maxGlyphs - total,
-		);
+		const jump = Math.min(Math.floor(room / baseWidth), maxGlyphs - total);
+		placeholder += base.repeat(jump);
 		counts[i] += jump;
 		total += jump;
-		while (counts[i] > 0 && widthOf(counts) > target + WIDTH_TOLERANCE) {
+		width = measure(placeholder);
+		while (counts[i] > 0 && width > target + WIDTH_TOLERANCE) {
+			placeholder = placeholder.slice(0, placeholder.length - base.length);
 			counts[i]--;
 			total--;
+			width = measure(placeholder);
 		}
+		let widthBeforeAppend = width;
 		do {
+			widthBeforeAppend = width;
+			placeholder += base;
 			counts[i]++;
 			total++;
 			if (total > maxGlyphs) {
 				return null;
 			}
-		} while (widthOf(counts) <= target + WIDTH_TOLERANCE);
+			width = measure(placeholder);
+		} while (width <= target + WIDTH_TOLERANCE);
+		placeholder = placeholder.slice(0, placeholder.length - base.length);
 		counts[i]--;
 		total--;
+		width = widthBeforeAppend;
 	}
 
 	// Hill-climb single ±1 tweaks toward the smallest absolute width error.
+	const render = (c: number[]) =>
+		ordered.map((o, i) => o.base.repeat(c[i])).join("");
+	const widthOf = (c: number[]) => measure(render(c));
 	let best = counts;
-	let bestError = Math.abs(widthOf(best) - target);
+	let bestError = Math.abs(width - target);
 	for (
 		let iteration = 0;
 		iteration < HILL_CLIMB_MAX_ITERATIONS && bestError > WIDTH_TOLERANCE;
@@ -402,17 +440,50 @@ function maskWordMeasured(word: string, spec: FontSpec): string {
 		return staticMaskText(word);
 	}
 
-	const cacheKey = `${spec.font}|${spec.letterSpacing}|${spec.textTransform}|${word}`;
+	const cacheKey = `${spec.key}|${word}`;
 	const cached = placeholderCache.get(cacheKey);
 	if (cached !== undefined) {
 		return cached;
 	}
 
 	const ctx = getConfiguredCtx(spec);
-	const placeholder = ctx
-		? (buildMeasuredPlaceholder(word, ctx, BASES, spec.textTransform) ??
-			staticMaskText(word))
-		: staticMaskText(word);
+	let placeholder: string | null = null;
+	if (ctx) {
+		const target = ctx.measureText(
+			applyTextTransform(word, spec.textTransform),
+		).width;
+		// Width-bucket reuse (see WIDTH_BUCKET_PX): a new word whose width
+		// matches an already-built placeholder costs one measureText and no
+		// construction.
+		const bucket = Math.round(target / WIDTH_BUCKET_PX);
+		let byWidth = widthBucketCache.get(spec.key);
+		placeholder = byWidth?.get(bucket) ?? null;
+		if (placeholder === null) {
+			placeholder = buildMeasuredPlaceholder(
+				target,
+				ctx,
+				BASES,
+				spec.textTransform,
+			);
+			if (placeholder !== null) {
+				if (widthBucketEntries >= WIDTH_BUCKET_CACHE_MAX_ENTRIES) {
+					// Wholesale clear is fine here: entries are width-keyed, so
+					// the hot buckets rebuild in a bounded number of
+					// constructions.
+					widthBucketCache.clear();
+					widthBucketEntries = 0;
+					byWidth = undefined;
+				}
+				if (!byWidth) {
+					byWidth = new Map();
+					widthBucketCache.set(spec.key, byWidth);
+				}
+				byWidth.set(bucket, placeholder);
+				widthBucketEntries++;
+			}
+		}
+	}
+	const result = placeholder ?? staticMaskText(word);
 
 	if (placeholderCache.size >= PLACEHOLDER_CACHE_MAX_ENTRIES) {
 		// Evict oldest-first (Map preserves insertion order) down to half, so
@@ -424,8 +495,8 @@ function maskWordMeasured(word: string, spec: FontSpec): string {
 			}
 		}
 	}
-	placeholderCache.set(cacheKey, placeholder);
-	return placeholder;
+	placeholderCache.set(cacheKey, result);
+	return result;
 }
 
 /**
@@ -458,6 +529,8 @@ export function maskTextValue(
 /** Test-only: reset module-level caches and canvas state. */
 export function resetTextMaskStateForTesting(): void {
 	placeholderCache.clear();
+	widthBucketCache.clear();
+	widthBucketEntries = 0;
 	staticMaskCache.clear();
 	staticCacheChars = 0;
 	measureCtx = undefined;
