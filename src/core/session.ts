@@ -1906,9 +1906,7 @@ export class MilanaSession implements IMilanaSessionSingleton {
 	private maskText(value: string, element: HTMLElement | null): string {
 		// Text is revealed only when it sits in an unmasked subtree and is not
 		// explicitly masked. Everything else — no element, an explicit mask, or
-		// not unmaskable — stays masked. canBeUnmasked is checked first: it
-		// short-circuits without ancestor walks when no unmaskSelector is set,
-		// and this runs for every masked text node on every serialization.
+		// not unmaskable — stays masked.
 		const reveal =
 			element !== null &&
 			this.elementOrAncestorCanBeUnmasked(element) &&
@@ -1968,11 +1966,10 @@ export class MilanaSession implements IMilanaSessionSingleton {
 	}
 
 	private elementOrAncestorCanBeUnmasked(element: HTMLElement): boolean {
-		// Selector null-check first: when no unmaskSelector is configured
-		// (the common case) nothing can ever be revealed, and the blocked
-		// ancestor walk below would be pure overhead on every masked node.
+		// A subtree is revealed by either the unmask class (default
+		// "milana-unmask") or an unmaskSelector — unless it sits under a
+		// blocked ancestor, which always wins.
 		return (
-			this.options.privacy.unmaskSelector !== null &&
 			!this.elementOrAncestorIsBlocked(element) &&
 			(this.elementOrAncestorHasClass(
 				element,

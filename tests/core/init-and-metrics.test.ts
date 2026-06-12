@@ -660,7 +660,7 @@ describe("Core Library - Init and Metrics", () => {
 					const maskedInputSubtree = nestUnder("sensitive", input);
 					nestUnder("milana-unmask", maskedInputSubtree);
 					expect(rrwebOptions.maskInputFn?.("customer data", input)).toBe(
-						"*************",
+						staticMaskText("customer data"),
 					);
 				});
 
