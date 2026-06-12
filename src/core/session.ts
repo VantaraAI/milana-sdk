@@ -270,6 +270,11 @@ export class MilanaSession implements IMilanaSessionSingleton {
 	private lastEmittedHasFocus: boolean | null = null;
 	private pageCloseHandler: ((event: PageTransitionEvent) => void) | null =
 		null;
+	private beforeUnloadHandler: (() => void) | null = null;
+	private pageShowHandler: (() => void) | null = null;
+	private unloadIntent = false;
+	private unloadIntentRafId: number | null = null;
+	private sawHiddenVisibilityBeforePageHide = false;
 	private hasSentClose = false;
 
 	private urlTrackingCleanup: Array<() => void> = [];
@@ -1386,6 +1391,36 @@ export class MilanaSession implements IMilanaSessionSingleton {
 		}
 	}
 
+	private clearUnloadIntent() {
+		this.unloadIntent = false;
+		if (this.unloadIntentRafId !== null) {
+			cancelAnimationFrame(this.unloadIntentRafId);
+			this.unloadIntentRafId = null;
+		}
+	}
+
+	private shouldUseBeforeUnloadIntent(): boolean {
+		if (typeof navigator === "undefined") return true;
+		return /\b(Chrome|Chromium|Edg|OPR)\//.test(navigator.userAgent);
+	}
+
+	private hasNoStickyUserActivation(): boolean {
+		const userActivation = (
+			navigator as Navigator & {
+				userActivation?: { hasBeenActive?: boolean };
+			}
+		).userActivation;
+		return userActivation?.hasBeenActive === false;
+	}
+
+	private canSendCloseWithoutUnloadIntent(): boolean {
+		if (!this.shouldUseBeforeUnloadIntent()) return true;
+		return (
+			this.hasNoStickyUserActivation() &&
+			!this.sawHiddenVisibilityBeforePageHide
+		);
+	}
+
 	/**
 	 * Issues a POST /batch for a programmatic `stopRecording()` call using
 	 * the ingest client-abort schema (`isClientAbort: true` +
@@ -1726,6 +1761,16 @@ export class MilanaSession implements IMilanaSessionSingleton {
 		// the tiny close ping.
 		if (this.visibilityChangeHandler === null) {
 			this.visibilityChangeHandler = () => {
+				// Returning to the page invalidates any previously captured
+				// unload intent. Covers the Android Chrome non-bfcache
+				// backgrounding case where pageshow won't fire on return.
+				if (document.visibilityState === "visible") {
+					this.clearUnloadIntent();
+					this.sawHiddenVisibilityBeforePageHide = false;
+				} else if (document.visibilityState === "hidden") {
+					this.sawHiddenVisibilityBeforePageHide = true;
+				}
+
 				// Emit visibility change as a recordable event (before flush so it's included in the batch)
 				if (this.state.type === StateType.Recording) {
 					try {
@@ -1809,38 +1854,92 @@ export class MilanaSession implements IMilanaSessionSingleton {
 			window.addEventListener("blur", this.windowFocusChangeHandler);
 		}
 
-		// Subscribes to `pagehide` but only acts when persisted=false, i.e. the
-		// page is actually being torn down (not bfcache-frozen). Signals to the
-		// server that this session can be closed immediately, short-circuiting
-		// the backend's ~30min inactivity window.
+		// Signals "session is ending" to the server so it can close immediately
+		// instead of waiting for the ~30min inactivity window. Gated on three
+		// signals because no single one is reliable on its own:
 		//
-		// Cross-browser bfcache landscape this design handles:
-		//   - Chrome: aggressive bfcache including cross-origin navigations;
-		//     fires `pagehide` with persisted=true. We skip the close so the
-		//     session can resume via Back.
-		//   - Safari (desktop): even more aggressive bfcache, including
-		//     same-origin nav. Same handling — skip close on persisted=true.
-		//   - Mobile Safari: backgrounding the tab (app switcher, home) fires
-		//     `visibilitychange → hidden` reliably, which is where event
-		//     delivery happens. `pagehide` with persisted=true follows when
-		//     the page is frozen. We do not lose buffered events.
-		//   - Firefox: bfcache only for in-history (back/forward) navigations;
-		//     forward nav and tab close fire `pagehide` with persisted=false,
-		//     where we do send the close ping.
+		//   1. `event.persisted === false` — necessary but not sufficient.
+		//      Modern mobile browsers (Android Chrome with bfcache disabled
+		//      by features like WebSockets) fire `pagehide(persisted=false)`
+		//      when the OS backgrounds the tab, even though the page is not
+		//      actually unloading. (MIL-697)
+		//   2. `unloadIntent === true` — set by a preceding `beforeunload`,
+		//      which fires only on real unload navigation (link click,
+		//      reload, tab close, programmatic location change). It does
+		//      not fire on tab backgrounding on any platform. Distinguishes
+		//      a real unload from a mobile background.
+		//   3. `hasSentClose === false` — idempotency.
 		//
-		// Across all four, `visibilitychange → hidden` precedes `pagehide`
-		// on tab close and on backgrounding, so the visibility-hidden flush
-		// owns event delivery and `pagehide` is just the close signal.
-		// Buffered events are already delivered by the visibility-hidden
-		// flush above either way.
+		// Event delivery is independent of this signal: the visibility-hidden
+		// flush above already pushes buffered events via keepalive whenever
+		// the tab goes hidden, regardless of whether it's really unloading.
+		// So skipping the close ping on backgrounding loses no events; it
+		// just defers the server-side session close to the inactivity window.
 		if (this.pageCloseHandler === null) {
 			this.pageCloseHandler = (event: PageTransitionEvent) => {
 				if (event.persisted) return;
 				if (this.state.type !== StateType.Recording) return;
 				if (this.hasSentClose) return;
+				if (!this.unloadIntent && !this.canSendCloseWithoutUnloadIntent()) {
+					return;
+				}
 				this.sendCloseRequest();
 			};
 			window.addEventListener("pagehide", this.pageCloseHandler);
+		}
+
+		// `beforeunload` is the only standard event that fires reliably on
+		// real unload navigation and does NOT fire on tab backgrounding. We
+		// use it as a one-shot latch to authorize the next `pagehide` to
+		// send the close ping.
+		//
+		// The listener is a true no-op: it does NOT call `preventDefault`
+		// and does NOT assign to `event.returnValue`, so it does not trigger
+		// the native "Leave site?" prompt. This guard is limited to Chromium-
+		// family browsers, where it addresses MIL-697 and is known to precede
+		// real unloads after sticky user activation. Other engines keep their
+		// existing `pagehide.persisted` behavior to preserve bfcache eligibility
+		// and close-signal coverage. Chromium pages without sticky activation
+		// may fall back to pagehide only if the page was not already observed
+		// hidden, which preserves the Android backgrounding guard.
+		if (
+			this.beforeUnloadHandler === null &&
+			this.shouldUseBeforeUnloadIntent()
+		) {
+			this.beforeUnloadHandler = () => {
+				this.unloadIntent = true;
+				// If another `beforeunload` handler on the page calls
+				// `preventDefault` and the user clicks "Stay", `pagehide`
+				// never fires and `unloadIntent` would stay true until
+				// something else cleared it — causing the next backgrounding
+				// to spuriously close. The page is still painting frames
+				// when navigation is cancelled, so an rAF callback that
+				// runs means we're still here. When navigation proceeds,
+				// `pagehide` fires before any frame paints, so the rAF
+				// reset runs after `sendCloseRequest` has set
+				// `hasSentClose=true` and is therefore harmless (hasSentClose
+				// dominates the guard chain).
+				if (this.unloadIntentRafId !== null) {
+					cancelAnimationFrame(this.unloadIntentRafId);
+				}
+				this.unloadIntentRafId = requestAnimationFrame(() => {
+					this.unloadIntent = false;
+					this.unloadIntentRafId = null;
+				});
+			};
+			window.addEventListener("beforeunload", this.beforeUnloadHandler);
+		}
+
+		// `pageshow` fires on initial load and on bfcache restore. If a
+		// prior `beforeunload` set `unloadIntent=true` before the page
+		// entered bfcache, clear it now that we're back so a later
+		// backgrounding doesn't spuriously close.
+		if (this.pageShowHandler === null) {
+			this.pageShowHandler = () => {
+				this.clearUnloadIntent();
+				this.sawHiddenVisibilityBeforePageHide = false;
+			};
+			window.addEventListener("pageshow", this.pageShowHandler);
 		}
 
 		if (this.logMetricsInterval === null) {
@@ -2143,6 +2242,19 @@ export class MilanaSession implements IMilanaSessionSingleton {
 			window.removeEventListener("pagehide", this.pageCloseHandler);
 			this.pageCloseHandler = null;
 		}
+
+		if (this.beforeUnloadHandler !== null) {
+			window.removeEventListener("beforeunload", this.beforeUnloadHandler);
+			this.beforeUnloadHandler = null;
+		}
+
+		if (this.pageShowHandler !== null) {
+			window.removeEventListener("pageshow", this.pageShowHandler);
+			this.pageShowHandler = null;
+		}
+
+		this.clearUnloadIntent();
+		this.sawHiddenVisibilityBeforePageHide = false;
 
 		this.events = [];
 		this.bufferedCharacters = 0;
