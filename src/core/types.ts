@@ -75,6 +75,10 @@ export type InitPrivacyOptions = {
 	// explicit masks (maskSelector / maskTextClass), blocked elements, or the
 	// always-masked input types (password/tel/email plus maskInputTypes).
 	unmaskSelector: string | null;
+	// Class-based counterpart to unmaskSelector, so host apps can mark known-safe
+	// product copy at render time (e.g. in their i18n component's wrapper).
+	// Same semantics and precedence as unmaskSelector. Set to "" to disable.
+	unmaskClass: string; // default: milana-unmask
 
 	// Additional input types to always mask, on top of the built-in
 	// always-masked types (password, tel, email). Like the built-ins, values
