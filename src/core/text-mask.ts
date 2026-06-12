@@ -57,10 +57,15 @@ const EMOJI_RE = /\p{Extended_Pictographic}/u;
 // so it is pinned against /\s/ by a test that sweeps the entire BMP;
 // exported for that test only.
 export function isSeparatorCode(code: number): boolean {
-	if (code === 0x20 || code === 0x2d || (code >= 0x09 && code <= 0x0d)) {
+	if (
+		code === 0x20 || // space
+		code === 0x2d || // hyphen-minus
+		(code >= 0x09 && code <= 0x0d) // tab, LF, vertical tab, form feed, CR
+	) {
 		return true;
 	}
 	if (code < 0x80) {
+		// Everything else in ASCII is content, masked — the common case.
 		return false;
 	}
 	return (
