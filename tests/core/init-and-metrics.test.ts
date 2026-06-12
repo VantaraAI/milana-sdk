@@ -465,6 +465,183 @@ describe("Core Library - Init and Metrics", () => {
 					);
 				});
 
+				test("default milana-unmask class reveals preset-masked text and inputs", async () => {
+					const { init } = await importMilana();
+					const { record } = await import("@rrweb/record");
+					mockSampledSession("unmask-class-default-session");
+
+					await init(
+						productId,
+						clientKey,
+						{
+							environment: "test",
+							version: "1.0",
+							metadata: {},
+						},
+						// No unmaskClass / unmaskSelector configured: the built-in
+						// "milana-unmask" convention must work on its own.
+						{ privacy: { maskingLevel: "xhigh" } },
+					);
+
+					const rrwebOptions = getRrwebOptions(record);
+
+					const textElement = document.createElement("span");
+					nestUnder("milana-unmask", textElement);
+					expect(rrwebOptions.maskTextFn?.("Public text", textElement)).toBe(
+						"Public text",
+					);
+
+					const input = document.createElement("input");
+					input.type = "text";
+					nestUnder("milana-unmask", input);
+					expect(rrwebOptions.maskInputFn?.("public data", input)).toBe(
+						"public data",
+					);
+
+					// Password is an always-masked type; the class must not reveal it.
+					const password = document.createElement("input");
+					password.type = "password";
+					nestUnder("milana-unmask", password);
+					expect(rrwebOptions.maskInputFn?.("hunter2", password)).toBe(
+						"*******",
+					);
+				});
+
+				test("custom unmaskClass replaces the default", async () => {
+					const { init } = await importMilana();
+					const { record } = await import("@rrweb/record");
+					mockSampledSession("unmask-class-custom-session");
+
+					await init(
+						productId,
+						clientKey,
+						{
+							environment: "test",
+							version: "1.0",
+							metadata: {},
+						},
+						{ privacy: { maskingLevel: "xhigh", unmaskClass: "copy-ok" } },
+					);
+
+					const rrwebOptions = getRrwebOptions(record);
+
+					const revealed = document.createElement("span");
+					nestUnder("copy-ok", revealed);
+					expect(rrwebOptions.maskTextFn?.("Public text", revealed)).toBe(
+						"Public text",
+					);
+
+					// The default class no longer reveals once overridden.
+					const stillMasked = document.createElement("span");
+					nestUnder("milana-unmask", stillMasked);
+					expect(rrwebOptions.maskTextFn?.("Secret", stillMasked)).toBe(
+						"******",
+					);
+				});
+
+				test("unmaskClass set to empty string disables class-based unmasking", async () => {
+					const { init } = await importMilana();
+					const { record } = await import("@rrweb/record");
+					mockSampledSession("unmask-class-disabled-session");
+
+					await init(
+						productId,
+						clientKey,
+						{
+							environment: "test",
+							version: "1.0",
+							metadata: {},
+						},
+						{ privacy: { maskingLevel: "xhigh", unmaskClass: "" } },
+					);
+
+					const rrwebOptions = getRrwebOptions(record);
+
+					const textElement = document.createElement("span");
+					nestUnder("milana-unmask", textElement);
+					expect(rrwebOptions.maskTextFn?.("Secret", textElement)).toBe(
+						"******",
+					);
+				});
+
+				test("explicit mask wins over unmaskClass", async () => {
+					const { init } = await importMilana();
+					const { record } = await import("@rrweb/record");
+					mockSampledSession("explicit-mask-over-class-session");
+
+					await init(
+						productId,
+						clientKey,
+						{
+							environment: "test",
+							version: "1.0",
+							metadata: {},
+						},
+						{
+							privacy: {
+								maskingLevel: "xhigh",
+								maskSelector: ".sensitive",
+							},
+						},
+					);
+
+					const rrwebOptions = getRrwebOptions(record);
+
+					// .sensitive (mask) ancestor below a milana-unmask ancestor: the
+					// explicit mask must win regardless of nesting order.
+					const textElement = document.createElement("span");
+					const maskedSubtree = nestUnder("sensitive", textElement);
+					nestUnder("milana-unmask", maskedSubtree);
+					expect(rrwebOptions.maskTextFn?.("Secret", textElement)).toBe(
+						"******",
+					);
+
+					const input = document.createElement("input");
+					input.type = "text";
+					const maskedInputSubtree = nestUnder("sensitive", input);
+					nestUnder("milana-unmask", maskedInputSubtree);
+					expect(rrwebOptions.maskInputFn?.("customer data", input)).toBe(
+						"*************",
+					);
+				});
+
+				test("explicitly set unmaskClass at maskingLevel normal logs a warning", async () => {
+					const { init } = await importMilana();
+					mockSampledSession("unmask-class-normal-warning-session");
+
+					await init(
+						productId,
+						clientKey,
+						{
+							environment: "test",
+							version: "1.0",
+							metadata: {},
+						},
+						// No maskingLevel -> defaults to "normal", where unmaskClass has
+						// nothing to reveal.
+						{ privacy: { unmaskClass: "copy-ok" } },
+					);
+
+					expect(console.warn).toHaveBeenCalledWith(
+						expect.stringContaining("privacy.unmaskClass is ignored"),
+					);
+				});
+
+				test("default unmaskClass at maskingLevel normal does not warn", async () => {
+					const { init } = await importMilana();
+					mockSampledSession("unmask-class-default-no-warning-session");
+
+					await init(productId, clientKey, {
+						environment: "test",
+						version: "1.0",
+						metadata: {},
+					});
+
+					expect(console.warn).not.toHaveBeenCalledWith(
+						expect.stringContaining("privacy.unmaskClass is ignored"),
+					);
+				});
+
 				test("maskInputTypes masks additional input types and cannot be unmasked", async () => {
 					const { init } = await importMilana();
 					const { record } = await import("@rrweb/record");
