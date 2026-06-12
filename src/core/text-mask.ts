@@ -10,8 +10,9 @@
  *   alphabet * # _ & @ whose width (computed from canvas-measured per-font
  *   glyph advances) matches the original within WIDTH_TOLERANCE.
  * - Static (fallback, never throws): per-grapheme substitution — CJK and
- *   emoji → ＊, anything else → *. Used when measurement is unavailable or
- *   not worth it.
+ *   emoji → ＊, anything else → *. Used when measurement is unavailable, for
+ *   script-specific cases where symbol width matching is poor, and for very
+ *   long tokens where measurement is expensive and unlikely to help wrapping.
  */
 
 const FULLWIDTH_ASTERISK = "＊";
