@@ -1,6 +1,6 @@
 {
 	"name": "milana-js",
-	"version": "1.0.20",
+	"version": "1.0.21",
 	"description": "Milana SDK — session recording and analytics for web applications",
 	"keywords": [
 		"session-recording",
@@ -16,7 +16,7 @@
 	"license": "MIT",
 	"packageManager": "pnpm@10.30.2",
 	"engines": {
-		"node": ">=24.0.0"
+		"node": ">=20.0.0"
 	},
 	"type": "module",
 	"main": "./dist/esm/core/index.js",
