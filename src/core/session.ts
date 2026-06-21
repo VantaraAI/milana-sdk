@@ -1,6 +1,7 @@
 import { record } from "@rrweb/record";
 import type { eventWithTime } from "@rrweb/types";
 import { getClickModifierPlugin } from "./click-modifier-plugin";
+import { getClipboardPlugin } from "./clipboard-plugin";
 import { getContentEditablePlugin } from "./contenteditable-plugin";
 import { debounce } from "./debounce";
 import { getDownloadDetectionPlugin } from "./download-detection-plugin";
@@ -1652,6 +1653,7 @@ export class MilanaSession implements IMilanaSessionSingleton {
 			getScrollDepthPlugin(),
 			getDownloadDetectionPlugin(),
 			getClickModifierPlugin(),
+			getClipboardPlugin(),
 		];
 
 		if (!this.options.disableContentEditableRecording) {
