@@ -2,15 +2,11 @@
 # Mitigates supply chain attacks — malicious releases are typically discovered
 # and removed within hours/days of publication.
 minimumReleaseAge: 10080
-# Escape hatch for security patches younger than the cooldown:
-# esbuild 0.28.1 fixes GHSA-gv7w-rqvm-qjhr (audit gate fails below it).
-# Scoped to the exact version so future esbuild releases stay quarantined.
-# The platform binaries can't be version-scoped (pnpm rejects pattern@version),
-# but esbuild pins its @esbuild/* optionalDependencies to its own exact
-# version, so only the 0.28.1 binaries can ever resolve.
+# Escape hatch for security patches younger than the cooldown. Scope each entry
+# to the exact patched version so future releases stay quarantined, and remove
+# the entry once that version has aged past the cooldown (the override/lockfile
+# pin keeps it installed without the exclude).
 minimumReleaseAgeExclude:
-  - esbuild@0.28.1
-  - "@esbuild/*"
   # undici 7.28.0 fixes CVE-2026-9697 (high, TLS cert validation bypass via
   # SOCKS5 ProxyAgent) and CVE-2026-9678 (medium, shared-cache info disclosure).
   # Transitive via jsdom (^7.25.0), dev-only. Scoped to the exact patched
