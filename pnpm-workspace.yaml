@@ -2,12 +2,3 @@
 # Mitigates supply chain attacks — malicious releases are typically discovered
 # and removed within hours/days of publication.
 minimumReleaseAge: 10080
-# Escape hatch for security patches younger than the cooldown:
-# esbuild 0.28.1 fixes GHSA-gv7w-rqvm-qjhr (audit gate fails below it).
-# Scoped to the exact version so future esbuild releases stay quarantined.
-# The platform binaries can't be version-scoped (pnpm rejects pattern@version),
-# but esbuild pins its @esbuild/* optionalDependencies to its own exact
-# version, so only the 0.28.1 binaries can ever resolve.
-minimumReleaseAgeExclude:
-  - esbuild@0.28.1
-  - "@esbuild/*"
