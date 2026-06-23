@@ -1,8 +1,3 @@
-// Instrument history.pushState/replaceState once per page and notify subscribers
-// of SPA navigations. We never restore the patched methods: on a shared page
-// another library may wrap on top of us, and restoring our captured original
-// would delete their wrapper.
-
 export type NavigationSource = "pushstate" | "replacestate" | "popstate";
 
 const subscribers = new Set<(source: NavigationSource) => void>();
