@@ -1,4 +1,5 @@
 import { debounce } from "./debounce";
+import { onNavigation } from "./navigation-events";
 import type { RrwebPlugin } from "./rrweb-plugin-types";
 
 const SCROLL_DEPTH_DEBOUNCE_MS = 250;
@@ -73,26 +74,8 @@ export function getScrollDepthPlugin(): RrwebPlugin {
 				checkScrollDepth();
 			};
 
-			// TODO: Both this plugin and session.ts independently monkey-patch
-			// history.pushState/replaceState, which is fragile if teardown order
-			// changes. A cleaner approach: session.ts (which already patches history
-			// for URL tracking) could dispatch a custom "milana:navigation" event,
-			// and this plugin would listen for that event instead of patching history
-			// itself.
-			// Detect pushState, replaceState, and popstate changes for SPAs to ensure we track scroll depth at the new paths
-			const originalPushState = history.pushState.bind(history);
-			const originalReplaceState = history.replaceState.bind(history);
-
-			history.pushState = (...args) => {
-				originalPushState(...args);
-				checkScrollDepth();
-			};
-			history.replaceState = (...args) => {
-				originalReplaceState(...args);
-				checkScrollDepth();
-			};
-
-			window.addEventListener("popstate", checkScrollDepth);
+			// Re-check scroll depth on SPA navigations (pushState/replaceState/popstate).
+			const removeNavigationListener = onNavigation(checkScrollDepth);
 			window.addEventListener("scroll", scrollHandler, { passive: true });
 
 			// Capture initial scroll depth on page load
@@ -105,10 +88,8 @@ export function getScrollDepthPlugin(): RrwebPlugin {
 					emitPendingDepth();
 				}
 
-				window.removeEventListener("popstate", checkScrollDepth);
+				removeNavigationListener();
 				window.removeEventListener("scroll", scrollHandler);
-				history.pushState = originalPushState;
-				history.replaceState = originalReplaceState;
 			};
 		},
 		options: {},

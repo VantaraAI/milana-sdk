@@ -6,6 +6,7 @@ import { getContentEditablePlugin } from "./contenteditable-plugin";
 import { debounce } from "./debounce";
 import { getDownloadDetectionPlugin } from "./download-detection-plugin";
 import { detectIntegrations } from "./integration-detector";
+import { onNavigation } from "./navigation-events";
 import { deepEqual } from "./object-utils";
 import { getScrollDepthPlugin } from "./scroll-depth-plugin";
 import {
@@ -1206,32 +1207,11 @@ export class MilanaSession implements IMilanaSessionSingleton {
 	}
 
 	private setupUrlTracking(): void {
-		const originalPushState = history.pushState.bind(history);
-		history.pushState = (...args) => {
-			originalPushState(...args);
-			this.debouncedTrackUrlChange(window.location.href, "pushstate");
-		};
-		this.urlTrackingCleanup.push(() => {
-			history.pushState = originalPushState;
-		});
-
-		const originalReplaceState = history.replaceState.bind(history);
-		history.replaceState = (...args) => {
-			originalReplaceState(...args);
-			this.debouncedTrackUrlChange(window.location.href, "replacestate");
-		};
-		this.urlTrackingCleanup.push(() => {
-			history.replaceState = originalReplaceState;
-		});
-
-		// Listen for popstate (back/forward buttons)
-		const popstateHandler = () => {
-			this.debouncedTrackUrlChange(window.location.href, "popstate");
-		};
-		window.addEventListener("popstate", popstateHandler);
-		this.urlTrackingCleanup.push(() => {
-			window.removeEventListener("popstate", popstateHandler);
-		});
+		this.urlTrackingCleanup.push(
+			onNavigation((source) => {
+				this.debouncedTrackUrlChange(window.location.href, source);
+			}),
+		);
 	}
 
 	private restartSession(cause: "update" | "batch") {
